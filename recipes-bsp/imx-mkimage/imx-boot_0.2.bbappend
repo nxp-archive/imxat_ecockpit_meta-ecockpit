@@ -4,6 +4,7 @@ SRCREV = "ecockpit_05_03"
 
 IMXBOOT_TARGETS = "flash_ecockpit_b0"
 UBOOT_NAME = "u-boot-${MACHINE}.bin-a53"
+BOOT_CONFIG_MACHINE = "${BOOT_NAME}-${MACHINE}.bin"
 
 do_compile () {
     if [ "${SOC_TARGET}" = "iMX8QM" ]; then
