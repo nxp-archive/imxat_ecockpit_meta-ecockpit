@@ -1,7 +1,3 @@
-IMX_MKIMAGE_SRC = "git://bitbucket.sw.nxp.com/mss/imx-mkimage-ecockpit.git;protocol=ssh"
-SRCBRANCH = "ecockpit_4.14.78_1.0.0_EC53-dev"
-SRCREV = "ecockpit_05_03"
-
 IMXBOOT_TARGETS = "flash_ecockpit_b0"
 UBOOT_NAME = "u-boot-${MACHINE}.bin-a53"
 BOOT_CONFIG_MACHINE = "${BOOT_NAME}-${MACHINE}.bin"
