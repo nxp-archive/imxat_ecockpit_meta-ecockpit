@@ -1,7 +1,3 @@
-ATF_SRC = "git://bitbucket.sw.nxp.com/mss/arm-trusted-firmware-ecockpit.git;protocol=ssh"
-SRCBRANCH = "ecockpit_4.14.78_1.0.0_EC53-dev"
-SRCREV = "ecockpit_05_03"
-
 do_compile_prepend() {
     export ECOCKPIT_A53=1
 }
