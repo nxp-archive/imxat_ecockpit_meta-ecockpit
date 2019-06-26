@@ -89,6 +89,8 @@ echo -e "\nKERNEL_SRC = \"\${ECOCKPIT_MIRROR}/linux-ecockpit.git;protocol=ssh\""
 echo -e "SRCBRANCH_pn-linux-imx = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-linux-imx = \"d339fc0f291cf154eb6fe1404937131c98f5bf98\"" >> $BUILD_DIR/conf/local.conf
 
+echo -e "\nPREFERRED_VERSION_imx-sc-firmware = \"8qm-ecockpit\"" >> $BUILD_DIR/conf/local.conf
+
 echo -e "\n## eCockpit layer" >> $BUILD_DIR/conf/bblayers.conf
 hook_in_layer meta-ecockpit meta-fsl-bsp-release/imx/meta-bsp
 
