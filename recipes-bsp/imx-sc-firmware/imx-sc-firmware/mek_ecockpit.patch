@@ -1,0 +1,4472 @@
+diff --git a/platform/board/mx8qm_mek_eco/Makefile b/platform/board/mx8qm_mek_eco/Makefile
+new file mode 100755
+index 0000000..1cf1dca
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/Makefile
+@@ -0,0 +1,29 @@
++#Set Default DDR config file
++ifeq ($(Z),1)
++	DDR_CON ?= imx8qm_dcd_emul
++else
++	DDR_CON ?= imx8qm_dcd_1.6GHz
++endif
++
++OBJS += $(OUT)/board/mx8qm_$(B)/board.o \
++		$(OUT)/board/board_common.o
++
++ifneq ($(HW), SIMU)
++    OBJS += $(OUT)/board/board.o
++endif
++
++DCDH += $(SRC)/board/mx8qm_$(B)/dcd/$(DDR_CON).h \
++		$(SRC)/board/mx8qm_$(B)/dcd/dcd.h \
++		$(SRC)/board/mx8qm_$(B)/dcd/$(DDR_CON)_retention.h \
++		$(SRC)/board/mx8qm_$(B)/dcd/dcd_retention.h
++
++RSRC_MD += $(SRC)/board/mx8qm_$(B)/resource.txt
++
++CTRL_MD += $(SRC)/board/mx8qm_$(B)/control.txt
++
++DIRS += $(OUT)/board/mx8qm_$(B)
++
++ifeq ($(M),1)
++        OBJS += $(OUT)/board/pmic.o
++endif
++
+diff --git a/platform/board/mx8qm_mek_eco/board.bom b/platform/board/mx8qm_mek_eco/board.bom
+new file mode 100755
+index 0000000..496815c
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/board.bom
+@@ -0,0 +1,9 @@
++
++DRV2 +=                 \
++        pmic            \
++        pmic/pf8100
++
++ifeq ($(M),1)
++        DRV2 += pmic/pf100
++endif
++
+diff --git a/platform/board/mx8qm_mek_eco/board.c b/platform/board/mx8qm_mek_eco/board.c
+new file mode 100644
+index 0000000..d636f32
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/board.c
+@@ -0,0 +1,1889 @@
++/*
++** ###################################################################
++**
++**     Copyright (c) 2016 Freescale Semiconductor, Inc.
++**     Copyright 2017-2018 NXP
++**
++**     Redistribution and use in source and binary forms, with or without modification,
++**     are permitted provided that the following conditions are met:
++**
++**     o Redistributions of source code must retain the above copyright notice, this list
++**       of conditions and the following disclaimer.
++**
++**     o Redistributions in binary form must reproduce the above copyright notice, this
++**       list of conditions and the following disclaimer in the documentation and/or
++**       other materials provided with the distribution.
++**
++**     o Neither the name of the copyright holder nor the names of its
++**       contributors may be used to endorse or promote products derived from this
++**       software without specific prior written permission.
++**
++**     THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++**     ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++**     WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++**     DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
++**     ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++**     (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++**     LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
++**     ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++**     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++**     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++**
++**
++** ###################################################################
++*/
++
++/*==========================================================================*/
++/*!
++ * @file
++ *
++ * File containing the implementation of the MX8QM MEK board.
++ *
++ * @addtogroup MX8QM_MEK_BRD (BRD) MX8QM MEK Board
++ *
++ * Module for MX8QM MEK board access.
++ * Modifications for the Ecockpit concept:
++ *      split the resources in 2 partitions: IVI and Cluster are isolated.
++ *
++ * @{
++ */
++/*==========================================================================*/
++
++/* Includes */
++
++#include "main/build_info.h"
++#include "main/scfw.h"
++#include "main/main.h"
++#include "main/board.h"
++#include "main/boot.h"
++#include "main/soc.h"
++#include "board/pmic.h"
++#include "all_svc.h"
++#include "drivers/lpi2c/fsl_lpi2c.h"
++#include "drivers/pmic/fsl_pmic.h"
++#include "drivers/pmic/pf8100/fsl_pf8100.h"
++#include "drivers/gpio/fsl_gpio.h"
++#include "drivers/snvs/fsl_snvs.h"
++#include "drivers/wdog32/fsl_wdog32.h"
++#include "drivers/lpuart/fsl_lpuart.h"
++#include "drivers/drc/fsl_drc_cbt.h"
++#include "drivers/systick/fsl_systick.h"
++#include "pads.h"
++#include "drivers/pad/fsl_pad.h"
++#include "dcd/dcd_retention.h"
++#include "ss/drc/v1/dsc.h"
++#include "split.h"
++#include "soc.h"
++
++/* Local Defines */
++
++/* timeout in us when waiting for A53 to boot */
++#define BOOT_TIMEOUT_US         1000000
++/* The start & end addresses of ATF.
++ * (see arm-trusted-firmware/plat/freescale/imx8qm/include/platform_def.h)
++ */
++#define BL31_BASE_A53           0x080000000
++#define BL31_LIMIT_A53          0x080020000
++
++#define BL31_BASE_A72           0x0C0000000
++#define BL31_LIMIT_A72          0x0C0020000
++
++/* memory region min size  */
++#define MRC_MIN_SIZE               0xFFF
++
++/* enables memory isolation (if XRDC enabled by SCU) */
++#define ECOCKPIT_MEMORY_ISOLATION 1
++
++/*!
++ * @name Board Configuration
++ * DO NOT CHANGE - must match object code.
++ */
++/*@{*/
++#define BRD_NUM_RSRC            11U
++#define BRD_NUM_CTRL            6U
++/*@}*/
++
++/*!
++ * @name Board Resources
++ * DO NOT CHANGE - must match object code.
++ */
++/*@{*/
++#define BRD_R_BOARD_PMIC_0      0U
++#define BRD_R_BOARD_PMIC_1      1U
++#define BRD_R_BOARD_PMIC_2      2U
++#define BRD_R_BOARD_R0          3U
++#define BRD_R_BOARD_R1          4U       /*! Base board */
++#define BRD_R_BOARD_R2          5U       /*! EMVSIM */
++#define BRD_R_BOARD_R3          6U       /*!< USDHC2 on Base board */
++#define BRD_R_BOARD_R4          7U
++#define BRD_R_BOARD_R5          8U
++#define BRD_R_BOARD_R6          9U
++#define BRD_R_BOARD_R7          10U      /*!< Test */
++/*@}*/
++
++#if DEBUG_UART == 3
++    /*! Use debugger terminal emulation */
++    #define DEBUG_TERM_EMUL
++#endif
++#if DEBUG_UART == 2
++    /*! Use alternate debug UART */
++    #define ALT_DEBUG_SCU_UART
++#endif
++#if (defined(MONITOR) || defined(EXPORT_MONITOR) || defined(HAS_TEST) \
++        || (DEBUG_UART == 1)) && !defined(DEBUG_TERM_EMUL) \
++        && !defined(ALT_DEBUG_SCU_UART)
++    #define ALT_DEBUG_UART
++#endif
++
++/*! Configure debug UART */
++#ifdef ALT_DEBUG_SCU_UART
++    #define LPUART_DEBUG        LPUART_SC
++#else
++    #define LPUART_DEBUG        LPUART_M4_0
++#endif
++
++/*! Configure debug UART instance */
++#ifdef ALT_DEBUG_SCU_UART
++    #define LPUART_DEBUG_INST   0U
++#else
++    #define LPUART_DEBUG_INST   2U
++#endif
++
++#ifdef EMUL
++    /*! Configure debug baud rate */
++    #define DEBUG_BAUD          4000000U
++#else
++    /*! Configure debug baud rate */
++    #define DEBUG_BAUD          115200U
++#endif
++
++/* Local Types */
++
++/* Local Functions */
++
++static void pmic_init(void);
++static sc_err_t pmic_ignore_current_limit(uint8_t address);
++static sc_err_t pmic_update_timing(uint8_t address);
++static void board_get_pmic_info(sc_sub_t ss,pmic_id_t *pmic_id,
++    uint32_t *pmic_reg, uint8_t *num_regs);
++
++/* Local Variables */
++
++static pmic_version_t pmic_ver;
++static uint32_t temp_alarm0;
++static uint32_t temp_alarm1;
++
++/*!
++ * This constant contains info to map resources to the board.
++ * DO NOT CHANGE - must match object code.
++ */
++const sc_rsrc_map_t board_rsrc_map[BRD_NUM_RSRC_BRD] =
++{
++    RSRC(PMIC_0,   0,  0),
++    RSRC(PMIC_1,   0,  1),
++    RSRC(PMIC_2,   0,  2),
++    RSRC(BOARD_R0, 0,  3),
++    RSRC(BOARD_R1, 0,  4),
++    RSRC(BOARD_R2, 0,  5),
++    RSRC(BOARD_R3, 0,  6),
++    RSRC(BOARD_R4, 0,  7),
++    RSRC(BOARD_R5, 0,  8),
++    RSRC(BOARD_R6, 0,  9),
++    RSRC(BOARD_R7, 0, 10)
++};
++
++/* Block of comments that get processed for documentation
++   DO NOT CHANGE - must match object code. */
++#ifdef DOX
++    RNFO() /* PMIC 0 */
++    RNFO() /* PMIC 1 */
++    RNFO() /* PMIC 2 */
++    RNFO() /* Misc. board component 0 */
++    RNFO() /* Misc. board component 1 */
++    RNFO() /* Misc. board component 2 */
++    RNFO() /* Misc. board component 3 */
++    RNFO() /* Misc. board component 4 */
++    RNFO() /* Misc. board component 5 */
++    RNFO() /* Misc. board component 6 */
++    RNFO() /* Misc. board component 7 */
++    TNFO(PMIC_0, TEMP,     RO, x, 8) /* Temperature sensor temp */
++    TNFO(PMIC_0, TEMP_HI,  RW, x, 8) /* Temperature sensor high limit alarm temp */
++    TNFO(PMIC_1, TEMP,     RO, x, 8) /* Temperature sensor temp */
++    TNFO(PMIC_1, TEMP_HI,  RW, x, 8) /* Temperature sensor high limit alarm temp */
++    TNFO(PMIC_2, TEMP,     RO, x, 8) /* Temperature sensor temp */
++    TNFO(PMIC_2, TEMP_HI,  RW, x, 8) /* Temperature sensor high limit alarm temp */
++#endif
++
++/* External Variables */
++
++const sc_rm_idx_t board_num_rsrc = BRD_NUM_RSRC_BRD;
++
++/*!
++ * External variable for specing DDR periodic training.
++ */
++#ifdef BD_LPDDR4_INC_DQS2DQ
++const uint32_t board_ddr_period_ms = 3000U;
++#else
++const uint32_t board_ddr_period_ms = 0U;
++#endif
++
++const sc_faddr_t ADDR_32B_START =   0x080000000;
++const sc_faddr_t ADDR_32B_MID =     0x0C0000000;
++const sc_faddr_t ADDR_32B_END =     0x0FFFFFFFF;
++const sc_faddr_t ADDR_64B_START =   0x880000000;
++const sc_faddr_t ADDR_64B_MID =     0x900000000;
++const sc_faddr_t ADDR_64B_END =     0xFFFFFFFFF;
++const sc_faddr_t ECOCKPIT_IMG_BAK = 0x0BFE00000;
++
++sc_rm_pt_t a72_sec_part;
++sc_rm_pt_t a53_sec_part;
++
++/*--------------------------------------------------------------------------*/
++/* Init                                                                     */
++/*--------------------------------------------------------------------------*/
++void board_init(boot_phase_t phase)
++{
++    gpio_pin_config_t config;
++    config.pinDirection = kGPIO_DigitalOutput;
++    sc_err_t err = SC_ERR_NONE;
++    int32_t elapstime_us, starttime_us;
++
++    ss_print(3, "board_init(%d)\n", phase);
++
++    if (phase == BOOT_PHASE_HW_INIT)
++    {
++        #ifndef ALT_DEBUG_SCU_UART
++            pad_force_mux(SC_P_SCU_GPIO0_01, 0,
++                SC_PAD_CONFIG_NORMAL, SC_PAD_ISO_OFF);
++        #endif
++        pad_force_mux(SC_P_SCU_GPIO0_02, 0, SC_PAD_CONFIG_NORMAL,
++            SC_PAD_ISO_OFF);
++
++        /* Toggle base board reset SC_GPIO_01, >= 30nS */
++        config.outputLogic  = 0U;
++        FGPIO_PinInit(FGPIOA, 1U, &config);
++        SYSTICK_CycleDelay(SC_SYSTICK_NSEC_TO_TICKS(30U) + 1U);
++        FGPIO_WritePinOutput(FGPIOA, 1U, 1U);  
++
++        /* SCU_LED on SC_GPIO_02 */
++        config.outputLogic  = 1U;
++        FGPIO_PinInit(FGPIOA, 2U, &config);
++
++        SystemTimeDelay(2U);
++    }
++    else if (phase == BOOT_PHASE_FINAL_INIT)
++    {
++        /* Configure SNVS button for rising edge */
++        SNVS_ConfigButton(SNVS_DRV_BTN_CONFIG_RISINGEDGE, SC_TRUE);
++
++        /* Init PMIC if not already done */
++        pmic_init();
++
++        /* wait for A53 ROM to copy the boot image in RAM */
++        starttime_us = (SYSTICK_GetCounter32() * SYSTICK_TICKS_PER_USEC);
++        do
++        {
++            SystemEnterLPM();
++            elapstime_us = (SYSTICK_GetCounter32() * SYSTICK_TICKS_PER_USEC) - starttime_us;
++        } while(!pm_get_booted(a53_sec_part) && (elapstime_us < BOOT_TIMEOUT_US));
++
++        if (elapstime_us >= BOOT_TIMEOUT_US) board_print(0, "TIMEOUT: A53 still not booted after = %dus, boot A72 anyway... \n", BOOT_TIMEOUT_US);
++
++        /* boot the A72 partition */
++        /* first boot by main() failed, this is expected because boot_addr does not match reset vector */
++        /* boot address should contain a trampoline that detects AP and jumps to the adequate boot image */
++        debug_print(0, "boot the A72 partition\n");
++        err = pm_boot(SC_PT, a72_sec_part, SC_R_A72_0, ADDR_32B_START, SC_R_MU_3A, SC_R_SDHC_0);
++        if (err != SC_ERR_NONE) board_print(0, "pm_boot A72 failed, err = %d\n", err);
++    }
++    else if (phase == BOOT_PHASE_TEST_INIT)
++    {
++        /* Configure board for SCFW tests - only called in a unit test
++         * image. Called just before SC tests are run. 
++         */
++
++        /* Configure ADMA UART pads. Needed for test_dma.
++         *  NOTE:  Even though UART is ALT0, the TX output will not work
++         *         until the pad mux is configured.
++         */
++        PAD_SetMux(IOMUXD__UART0_TX, 0U, SC_PAD_CONFIG_NORMAL,
++            SC_PAD_ISO_OFF);
++        PAD_SetMux(IOMUXD__UART0_RX, 0U, SC_PAD_CONFIG_NORMAL,
++            SC_PAD_ISO_OFF);
++    }
++    else
++    {
++        ; /* Intentional empty else */
++    }
++}
++
++/*--------------------------------------------------------------------------*/
++/* Return the debug UART info                                               */
++/*--------------------------------------------------------------------------*/
++LPUART_Type *board_get_debug_uart(uint8_t *inst, uint32_t *baud)
++{
++    #if (defined(ALT_DEBUG_UART) || defined(ALT_DEBUG_SCU_UART)) \
++            && !defined(DEBUG_TERM_EMUL)
++        *inst = LPUART_DEBUG_INST;
++        *baud = DEBUG_BAUD;
++
++        return LPUART_DEBUG;
++    #else
++        return NULL;
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Configure debug UART                                                     */
++/*--------------------------------------------------------------------------*/
++void board_config_debug_uart(sc_bool_t early_phase)
++{
++    #if defined(ALT_DEBUG_SCU_UART) && !defined(DEBUG_TERM_EMUL) \
++            && defined(DEBUG) && !defined(SIMU)
++        /* Power up UART */
++        pm_force_resource_power_mode_v(SC_R_SC_UART,
++            SC_PM_PW_MODE_ON);
++    
++        /* Check if debug disabled */
++        if (SCFW_DBG_READY == 0U)
++        {
++            main_config_debug_uart(LPUART_DEBUG, SC_24MHZ);
++        }
++    #elif defined(ALT_DEBUG_UART) && defined(DEBUG) && !defined(SIMU)
++        /* Use M4 UART if ALT_DEBUG_UART defined */
++        /* Return if debug already enabled */
++        if ((SCFW_DBG_READY == 0U) && (early_phase == SC_FALSE))
++        {
++            sc_pm_clock_rate_t rate = SC_24MHZ;
++            static sc_bool_t banner = SC_FALSE;
++
++            /* Configure pads */
++            pad_force_mux(SC_P_M40_I2C0_SDA, 1,
++                SC_PAD_CONFIG_NORMAL, SC_PAD_ISO_OFF);
++            pad_force_mux(SC_P_M40_I2C0_SCL, 1,
++                SC_PAD_CONFIG_NORMAL, SC_PAD_ISO_OFF);
++
++            /* Power and enable clock */
++            pm_force_resource_power_mode_v(SC_R_SC_PID0,
++                SC_PM_PW_MODE_ON);
++            pm_force_resource_power_mode_v(SC_R_DBLOGIC,
++                SC_PM_PW_MODE_ON);
++            pm_force_resource_power_mode_v(SC_R_DB, SC_PM_PW_MODE_ON);
++            pm_force_resource_power_mode_v(SC_R_M4_0_UART,
++                SC_PM_PW_MODE_ON);
++            (void) pm_set_clock_rate(SC_PT, SC_R_M4_0_UART, SC_PM_CLK_PER,
++                &rate);
++            (void) pm_clock_enable(SC_PT, SC_R_M4_0_UART, SC_PM_CLK_PER,
++                SC_TRUE, SC_FALSE);
++
++            /* Configure UART */
++            main_config_debug_uart(LPUART_DEBUG, rate);
++
++            if (banner == SC_FALSE)
++            {
++                debug_print(1, 
++                    "\nHello from SCU (Build %u, Commit %08x, %s %s)\n\n",
++                    SCFW_BUILD, SCFW_COMMIT, SCFW_DATE, SCFW_TIME);
++                banner = SC_TRUE;
++            }
++        }
++    #elif defined(DEBUG_TERM_EMUL) && defined(DEBUG) && !defined(SIMU)
++        *SCFW_DBG_TX_PTR = 0U;
++        *SCFW_DBG_RX_PTR = 0U;
++        /* Set to 2 for JTAG emulation */
++        SCFW_DBG_READY = 2U;
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Disable debug UART                                                       */
++/*--------------------------------------------------------------------------*/
++void board_disable_debug_uart(void)
++{
++    /* Use M4 UART if ALT_DEBUG_UART defined */
++    #if defined(ALT_DEBUG_UART) && defined(DEBUG) && !defined(SIMU)
++        /* Return if debug already disabled */
++        if (SCFW_DBG_READY != 0U)
++        {
++            /* Disable use of UART */
++            SCFW_DBG_READY = 0U;
++
++            // UART deinit to flush TX buffers 
++            LPUART_Deinit(LPUART_DEBUG);
++
++            /* Turn off UART */
++            pm_force_resource_power_mode_v(SC_R_M4_0_UART,
++                SC_PM_PW_MODE_OFF);
++        }
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Configure SCFW resource/pins                                             */
++/*--------------------------------------------------------------------------*/
++void board_config_sc(sc_rm_pt_t pt_sc)
++{
++    /* By default, the SCFW keeps most of the resources found in the SCU
++     * subsystem. It also keeps the SCU/PMIC pads required for the main
++     * code to function. Any additional resources or pads required for
++     * the board code to run should be kept here. This is done by marking
++     * them as not movable.
++     */
++    #ifdef ALT_DEBUG_UART
++        (void) rm_set_resource_movable(SC_PT, SC_R_M4_0_UART, SC_R_M4_0_UART,
++            SC_FALSE);
++        (void) rm_set_pad_movable(SC_PT, SC_P_M40_I2C0_SCL, SC_P_M40_I2C0_SDA,
++            SC_FALSE);
++    #endif
++
++    (void) rm_set_resource_movable(pt_sc, SC_R_SC_I2C, SC_R_SC_I2C,
++        SC_FALSE);
++    (void) rm_set_pad_movable(pt_sc, SC_P_PMIC_I2C_SDA, SC_P_PMIC_I2C_SCL,
++        SC_FALSE);
++    #ifdef ALT_DEBUG_SCU_UART
++        (void) rm_set_pad_movable(pt_sc, SC_P_SCU_GPIO0_00,
++            SC_P_SCU_GPIO0_02, SC_FALSE);
++    #else
++        (void) rm_set_pad_movable(pt_sc, SC_P_SCU_GPIO0_01,
++            SC_P_SCU_GPIO0_02, SC_FALSE);
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Get board parameter                                                      */
++/*--------------------------------------------------------------------------*/
++board_parm_rtn_t board_parameter(board_parm_t parm)
++{
++    board_parm_rtn_t rtn = BOARD_PARM_RTN_NOT_USED;
++
++    /* Note return values are usually static. Can be made dynamic by storing
++       return in a global variable and setting using board_set_control() */
++
++    switch (parm)
++    {
++        /* Used whenever HSIO SS powered up. Valid return values are
++           BOARD_PARM_RTN_EXTERNAL or BOARD_PARM_RTN_INTERNAL */
++        case BOARD_PARM_PCIE_PLL :
++            rtn = BOARD_PARM_RTN_EXTERNAL;
++            break;
++        case BOARD_PARM_KS1_RESUME_USEC:
++            rtn = BOARD_KS1_RESUME_USEC;
++            break;
++        case BOARD_PARM_KS1_RETENTION:
++            rtn = BOARD_KS1_RETENTION;
++            break;
++        case BOARD_PARM_KS1_ONOFF_WAKE:
++            rtn = BOARD_KS1_ONOFF_WAKE;
++            break;                            
++        default :
++            ; /* Intentional empty default */
++            break;
++    }
++
++    return rtn;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Get resource avaiability info                                            */
++/*--------------------------------------------------------------------------*/
++sc_bool_t board_rsrc_avail(sc_rsrc_t rsrc)
++{
++    sc_bool_t rtn = SC_TRUE;
++    
++    /* Return SC_FALSE here if a resource isn't available due to board 
++       connections (typically lack of power). Examples incluse DRC_0/1
++       and ADC. */
++    #if defined(BD_DDR_RET_NUM_DRC) && (BD_DDR_RET_NUM_DRC == 1U)
++        if(rsrc == SC_R_DRC_1)
++        {
++            rtn = SC_FALSE;
++        }
++    #endif
++
++    /* The value here may be overridden by SoC fuses or emulation config */
++
++    /* Note return values are usually static. Can be made dynamic by storing
++       return in a global variable and setting using board_set_control() */
++
++    return rtn;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Init DDR                                                                 */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_init_ddr(sc_bool_t early, sc_bool_t ddr_initialized)
++{
++    /*
++     * Variables for DDR retention
++     */
++    #ifdef BD_DDR_RET
++        /* Storage for DRC registers */
++        static ddrc board_ddr_ret_drc_inst[BD_DDR_RET_NUM_DRC];
++        
++        /* Storage for DRC PHY registers */
++        static ddr_phy board_ddr_ret_drc_phy_inst[BD_DDR_RET_NUM_DRC];
++        
++        /* Storage for DDR regions */
++        static uint32_t board_ddr_ret_buf1[BD_DDR_RET_REGION1_SIZE];
++        #ifdef BD_DDR_RET_REGION2_SIZE
++        static uint32_t board_ddr_ret_buf2[BD_DDR_RET_REGION2_SIZE];
++        #endif
++        #ifdef BD_DDR_RET_REGION3_SIZE
++        static uint32_t board_ddr_ret_buf3[BD_DDR_RET_REGION3_SIZE];
++        #endif
++        #ifdef BD_DDR_RET_REGION4_SIZE
++        static uint32_t board_ddr_ret_buf4[BD_DDR_RET_REGION4_SIZE];
++        #endif
++        #ifdef BD_DDR_RET_REGION5_SIZE
++        static uint32_t board_ddr_ret_buf5[BD_DDR_RET_REGION5_SIZE];
++        #endif
++        #ifdef BD_DDR_RET_REGION6_SIZE
++        static uint32_t board_ddr_ret_buf6[BD_DDR_RET_REGION6_SIZE];
++        #endif
++        
++        /* DDR region descriptors */
++        static const soc_ddr_ret_region_t board_ddr_ret_region[BD_DDR_RET_NUM_REGION] = 
++        {
++            { BD_DDR_RET_REGION1_ADDR, BD_DDR_RET_REGION1_SIZE, board_ddr_ret_buf1 },
++        #ifdef BD_DDR_RET_REGION2_SIZE
++            { BD_DDR_RET_REGION2_ADDR, BD_DDR_RET_REGION2_SIZE, board_ddr_ret_buf2 },
++        #endif
++        #ifdef BD_DDR_RET_REGION3_SIZE
++            { BD_DDR_RET_REGION3_ADDR, BD_DDR_RET_REGION3_SIZE, board_ddr_ret_buf3 },
++        #endif
++        #ifdef BD_DDR_RET_REGION4_SIZE
++            { BD_DDR_RET_REGION4_ADDR, BD_DDR_RET_REGION4_SIZE, board_ddr_ret_buf4 },
++        #endif
++        #ifdef BD_DDR_RET_REGION5_SIZE
++            { BD_DDR_RET_REGION5_ADDR, BD_DDR_RET_REGION5_SIZE, board_ddr_ret_buf5 },
++        #endif
++        #ifdef BD_DDR_RET_REGION6_SIZE
++            { BD_DDR_RET_REGION6_ADDR, BD_DDR_RET_REGION6_SIZE, board_ddr_ret_buf6 }
++        #endif
++        };
++
++        /* DDR retention descriptor passed to SCFW */
++        static soc_ddr_ret_info_t board_ddr_ret_info = 
++        { 
++          BD_DDR_RET_NUM_DRC, board_ddr_ret_drc_inst, board_ddr_ret_drc_phy_inst, 
++          BD_DDR_RET_NUM_REGION, board_ddr_ret_region
++        };
++    #endif
++
++    board_print(3, "board_init_ddr(%d)\n", early);
++
++    #ifdef SKIP_DDR
++        return SC_ERR_UNAVAILABLE;
++    #else
++        sc_err_t err = SC_ERR_NONE;
++
++        /* Don't power up DDR for M4s */
++        ASRT_ERR(early == SC_FALSE, SC_ERR_UNAVAILABLE);
++
++        if ((err == SC_ERR_NONE) && (ddr_initialized == SC_FALSE))
++        {
++            board_print(1, "SCFW: ");
++            err = board_ddr_config(SC_FALSE, BOARD_DDR_COLD_INIT);
++        }
++
++        #ifdef DEBUG_BOARD
++            uint32_t rate = 0U;
++            if (rm_is_resource_avail(SC_R_DRC_0))
++            {
++                (void) pm_get_clock_rate(SC_PT, SC_R_DRC_0, SC_PM_CLK_MISC0,
++                    &rate);
++            }
++            else if (rm_is_resource_avail(SC_R_DRC_1))
++            {
++                (void) pm_get_clock_rate(SC_PT, SC_R_DRC_1, SC_PM_CLK_MISC0,
++                    &rate);
++            }
++            else
++            {
++                ; /* Intentional empty else */
++            }
++            board_print(1, "DDR frequency = %u\n", rate * 2U);
++        #endif
++
++        if (err == SC_ERR_NONE)
++        {
++            #ifdef BD_DDR_RET
++                soc_ddr_config_retention(&board_ddr_ret_info);
++            #endif
++
++            #ifdef BD_LPDDR4_INC_DQS2DQ
++                if (board_ddr_period_ms != 0U)
++                {
++                    soc_ddr_dqs2dq_init();
++                }
++            #endif
++        }
++
++        return err;
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Take action on DDR                                                       */
++/*--------------------------------------------------------------------------*/
++sc_err_t  board_ddr_config(bool rom_caller, board_ddr_action_t action)
++{
++    /* Note this is called by the ROM before the SCFW is initialized.
++     * Do NOT make any unqualified calls to any other APIs.
++     */
++
++    sc_err_t err = SC_ERR_NONE;
++
++    switch(action)
++    {
++        case BOARD_DDR_PERIODIC:
++    #ifdef BD_LPDDR4_INC_DQS2DQ
++            soc_ddr_dqs2dq_periodic();
++    #endif
++            break;
++        case BOARD_DDR_SR_DRC_OFF_ENTER:
++            board_ddr_periodic_enable(SC_FALSE);
++    #ifdef BD_DDR_RET
++            soc_ddr_enter_retention();
++    #endif
++            break;
++        case BOARD_DDR_SR_DRC_OFF_EXIT:
++    #ifdef BD_DDR_RET
++            soc_ddr_exit_retention();
++    #endif
++    #ifdef BD_LPDDR4_INC_DQS2DQ
++            soc_ddr_dqs2dq_init();
++    #endif
++            board_ddr_periodic_enable(SC_TRUE);
++            break;
++        case BOARD_DDR_SR_DRC_ON_ENTER:
++            board_ddr_periodic_enable(SC_FALSE);
++            soc_self_refresh_power_down_clk_disable_entry();
++            break;
++        case BOARD_DDR_SR_DRC_ON_EXIT:
++            soc_refresh_power_down_clk_disable_exit();
++    #ifdef BD_LPDDR4_INC_DQS2DQ
++            soc_ddr_dqs2dq_periodic();
++    #endif
++            board_ddr_periodic_enable(SC_TRUE);
++            break;
++        case BOARD_DDR_PERIODIC_HALT:
++            board_ddr_periodic_enable(SC_FALSE);
++            break;
++        case BOARD_DDR_PERIODIC_RESTART:
++    #ifdef BD_LPDDR4_INC_DQS2DQ
++            soc_ddr_dqs2dq_periodic();
++    #endif
++            board_ddr_periodic_enable(SC_TRUE);
++            break;
++        default:
++            #include "dcd/dcd.h"
++            break;
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Configure the system (inc. additional resource partitions)               */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_system_config(sc_bool_t early, sc_rm_pt_t pt_boot)
++{
++    sc_err_t err = SC_ERR_NONE;
++    
++    /* This function configures the system. It usually partitions
++       resources according to the system design. It must be modified by
++       customers. Partitions should then be specified using the mkimage
++       -p option. */
++
++    /* Note the configuration here is for NXP test purposes */
++
++    sc_bool_t alt_config = SC_FALSE;
++    sc_bool_t no_ap = SC_FALSE;
++    
++    /* Get boot parameters. See the Boot Flags section for defintition
++       of these flags.*/
++    (void) boot_get_data(NULL, NULL, NULL, NULL, NULL, NULL, &alt_config,
++        NULL, NULL, &no_ap);
++
++    uint32_t i;
++#ifdef ECOCKPIT_MEMORY_ISOLATION
++    sc_rm_mr_t mr;
++#endif
++    a53_sec_part = pt_boot;
++
++    board_print(3, "board_system_config(%d, %d)\n", early, alt_config);
++
++    /* Configure initial resource allocation (note additional allocation
++       and assignments can be made by the SCFW clients at run-time */
++
++    /* split resources here to enforce isolation of the eCockpit concept */
++    /************************/
++    /* create A72 partition */
++    /************************/
++    err = rm_partition_alloc(SC_PT, &a72_sec_part,
++            true,   /* secure */
++            true,  /* isolated */
++            false,  /* restricted */
++            true,  /* grant */
++            false); /* coherent */
++    if (err != SC_ERR_NONE) board_print(0, "rm_partition_alloc failed, err = %d\n", err);
++
++    /* SCU must be parent, else it won't be able to boot a72 partition */
++    err = rm_set_parent(SC_PT, a72_sec_part, SC_PT);  /* TBD could A53 ATF be parent? */
++    if (err != SC_ERR_NONE) board_print(0, "rm_set_parent failed, err = %d\n", err);
++
++    /* assign secure resources */
++    for (i = 0u; i < (sizeof(a72_secure_rsrcs) / sizeof(sc_rsrc_t)); i++)
++    {
++        err = rm_assign_resource(SC_PT, a72_sec_part, a72_secure_rsrcs[i]);
++        if (err != SC_ERR_NONE) board_print(0, "rm_assign_resource to A72 failed on resource = %d, err = %d\n", a72_secure_rsrcs[i], err);
++    }
++
++    /* assign non-secure resources */
++    for (i = 0u; i < (sizeof(a72_ns_rsrcs) / sizeof(sc_rsrc_t)); i++)
++    {
++        err = rm_assign_resource(SC_PT, a72_sec_part, a72_ns_rsrcs[i]);
++        if (err != SC_ERR_NONE) board_print(0, "rm_assign_resource to A72 failed on resource = %d, err = %d\n", a72_ns_rsrcs[i], err);
++    }
++
++    /* assign pads to A72 partition */
++    for (i = 0u; i < (sizeof(a72_pads) / sizeof(sc_pad_t)); i++)
++    {
++        err = rm_assign_pad(SC_PT, a72_sec_part, a72_pads[i]);
++        if (err != SC_ERR_NONE) board_print(0, "rm_assign_pad to A72 failed on pad = %d, err = %d\n", a72_pads[i], err);
++    }
++
++    /* assign key unique resources to SCU: GIC, SMMU, CCI */
++    /* share them with A53/A72 partitions */
++    for (i = 0u; i < (sizeof(shared_rsrcs) / sizeof(sc_rsrc_t)); i++)
++    {
++        err = rm_assign_resource(SC_PT, SC_PT, shared_rsrcs[i]);
++        if (err != SC_ERR_NONE) board_print(0, "rm_assign_resource to SCU failed on resource = %d, err = %d\n", shared_rsrcs[i], err);
++        err = rm_set_peripheral_permissions(SC_PT, shared_rsrcs[i], a53_sec_part, SC_RM_PERM_FULL);
++        if (err != SC_ERR_NONE) board_print(0, "rm_set_peripheral_permissions to A53 failed on resource = %d, err = %d\n", shared_rsrcs[i], err);
++        err = rm_set_peripheral_permissions(SC_PT, shared_rsrcs[i], a72_sec_part, SC_RM_PERM_FULL);
++        if (err != SC_ERR_NONE) board_print(0, "rm_set_peripheral_permissions to A72 failed on resource = %d, err = %d\n", shared_rsrcs[i], err);
++    }
++
++#ifdef ECOCKPIT_MEMORY_ISOLATION
++    /* For A72, allocate same memory regions as A53 */
++    const sc_memmap_t soc_memmap[] =
++    {
++        SC_MEMMAP_INIT
++    };
++    const sc_memmap_t *memmap = soc_memmap;
++
++    while ((memmap->start != SC_NA) || (memmap->len != SC_NA))
++    {
++        if (memmap->mem)
++        {
++            sc_rm_mr_t mr_boot_mem;
++
++            /* skip this region: will split it from A53 region */
++            if ( ((memmap->start == ADDR_32B_START) && ((memmap->start + memmap->len - 1U) == ADDR_32B_END))
++                    || ((memmap->start == ADDR_64B_START) && ((memmap->start + memmap->len - 1U) == ADDR_64B_END)) )
++            {
++                memmap++;
++                continue;
++            }
++            /* Allocate for boot */
++            err = rm_memreg_alloc(SC_PT, &mr_boot_mem, memmap->start, memmap->start + memmap->len - 1U);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n",
++                    memmap->start, (memmap->start + memmap->len - 1U), err);
++            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_boot_mem);
++            if (err != SC_ERR_NONE) board_print(0, "rm_assign_memreg(mr=%d) failed, err %d\n", mr_boot_mem, err);
++        }
++        memmap++;
++    }
++
++    /* split A53 Memory Regions for A72 */
++    for (mr = 0; mr < 64; mr++)
++    {
++        bool owned = rm_is_memreg_owned(a53_sec_part, mr);
++        sc_faddr_t start, end;
++        sc_rm_mr_t mr_a72, mr_a53;
++        sc_rm_mr_t mr_bak;
++        if (!owned) continue;
++        err = rm_get_memreg_info(SC_PT, mr, &start, &end);
++
++        /* free region and re-create 4 new ones: trampoline region, A53 region, A72 region, backup region */
++        if ((start == ADDR_32B_START) && (end == ADDR_32B_END))
++        {
++            /* region for A53 */
++            err = rm_memreg_free(SC_PT, mr);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_free failed, err %d\n", err);
++
++            err = rm_memreg_alloc(SC_PT, &mr_a53, ADDR_32B_START, ECOCKPIT_IMG_BAK-1);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_START, ECOCKPIT_IMG_BAK-1, err);
++
++            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_START, ECOCKPIT_IMG_BAK-1, err);
++
++            /* region for A72 */
++            err = rm_memreg_alloc(SC_PT, &mr_a72, ADDR_32B_MID, ADDR_32B_END);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, ADDR_32B_END, err);
++
++            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, ADDR_32B_END, err);
++
++            /* protect the boot-images backup region */
++            err = rm_memreg_alloc(SC_PT, &mr_bak, ECOCKPIT_IMG_BAK, ADDR_32B_MID - 1);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", ECOCKPIT_IMG_BAK, ADDR_32B_MID-1, err);
++
++            err = rm_assign_memreg(SC_PT, SC_PT, mr_bak);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg backup assign failed, 0x%lx -- 0x%lx, err %d\n", ECOCKPIT_IMG_BAK, ADDR_32B_MID-1, err);
++
++            /* alloc a region for trampoline, assign it to A53 and grant access to A72 */
++            err = rm_memreg_alloc(SC_PT, &mr_a72, (sc_faddr_t) BL31_BASE_A53, (sc_faddr_t) (BL31_BASE_A53 + MRC_MIN_SIZE));
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", BL31_BASE_A53, (BL31_BASE_A53 + MRC_MIN_SIZE), err);
++
++            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a72);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", BL31_BASE_A53, (BL31_BASE_A53 + MRC_MIN_SIZE), err);
++
++            err = rm_set_memreg_permissions(SC_PT, mr_a72, a72_sec_part, SC_RM_PERM_SEC_R);
++            if (err != SC_ERR_NONE) board_print(0, "rm_set_memreg_permissions(mr=%d) failed for A72, err %d\n", mr, err);
++        }
++       if ((start == ADDR_64B_START) && (end == ADDR_64B_END))
++        {
++            /* A72 has second half of 64bits addresses */
++            err = rm_memreg_split(SC_PT, mr, &mr_a72, ADDR_64B_MID, ADDR_64B_END);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", ADDR_64B_MID, ADDR_64B_END, err);
++
++            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_64B_MID, ADDR_64B_END, err);
++        }
++    }
++#endif /* ECOCKPIT_MEMORY_ISOLATION */
++
++    /* create a region that excludes ATF. This region will be assigned to the Non-Secure partition later on */
++    /* do it for A53 partition */
++    err = rm_memreg_alloc(SC_PT, &mr, (sc_faddr_t) BL31_LIMIT_A53, (sc_faddr_t) ECOCKPIT_IMG_BAK-1);
++    if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed for A53, BL31_LIMIT_A53 - 0xffffffff, err %d\n", err);
++    err = rm_assign_memreg(SC_PT, a53_sec_part, mr);
++    if (err != SC_ERR_NONE) board_print(0, "rm_assign_memreg(mr=%d) failed for A53, err %d\n", mr, err);
++
++    /* do it for A72 partition */
++    err = rm_memreg_alloc(SC_PT, &mr, (sc_faddr_t) BL31_LIMIT_A72, (sc_faddr_t) 0xffffffff);
++    if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed for A72, BL31_LIMIT_A72 - 0xffffffff, err %d\n", err);
++    err = rm_assign_memreg(SC_PT, a72_sec_part, mr);
++    if (err != SC_ERR_NONE) board_print(0, "rm_assign_memreg(mr=%d) failed for A72, err %d\n", mr, err);
++
++    if (alt_config != SC_FALSE)
++    {
++        sc_rm_pt_t pt_m4_0;
++        sc_rm_pt_t pt_m4_1;
++        sc_rm_mr_t mr_m4_0, mr_m4_1;
++        sc_rm_pt_t pt_sh;
++        sc_rm_mr_t mr_sh;
++
++        #ifdef BOARD_RM_DUMP
++            rm_dump(pt_boot);
++        #endif
++
++        /* Mark all resources as not movable */
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_ALL, SC_R_ALL,
++            SC_FALSE));
++        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_ALL, SC_P_ALL,
++            SC_FALSE));
++        
++        /* Allocate M4_0 partition */
++        BRD_ERR(rm_partition_alloc(pt_boot, &pt_m4_0, SC_FALSE, SC_TRUE,
++            SC_FALSE, SC_TRUE, SC_FALSE));
++        
++        /* Mark all M4_0 subsystem resources as movable */
++        BRD_ERR(rm_set_subsys_rsrc_movable(pt_boot, SC_R_M4_0_PID0,
++            SC_TRUE));
++        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_M40_I2C0_SCL,
++            SC_P_M40_GPIO0_01, SC_TRUE));
++
++        /* Move some resources not in the M4_0 subsystem */
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_SYSTEM,
++            SC_R_SYSTEM, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_IRQSTR_M4_0,
++            SC_R_IRQSTR_M4_0, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_5B,
++            SC_R_MU_5B, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_7A,
++            SC_R_MU_7A, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_8B,
++            SC_R_MU_8B, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_GPT_4,
++            SC_R_GPT_4, SC_TRUE));
++
++        /* Move everything flagged as movable */
++        BRD_ERR(rm_move_all(pt_boot, pt_boot, pt_m4_0, SC_TRUE, SC_TRUE));
++
++        /* Allow all to access the SEMA42 */
++        BRD_ERR(rm_set_peripheral_permissions(pt_m4_0, SC_R_M4_0_SEMA42,
++            SC_RM_PT_ALL, SC_RM_PERM_FULL));
++
++        /* Move M4 0 TCM */
++        BRD_ERR(rm_find_memreg(pt_boot, &mr_m4_0, 0x034FE0000ULL,
++            0x034FE0000ULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_0, mr_m4_0));
++
++        /* Reserve DDR for M4_0 */
++        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_0, 0x088000000ULL,
++            0x0887FFFFFULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_0, mr_m4_0));
++
++        /* Reserve FlexSPI for M4_0 */
++        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_0, 0x08081000ULL,
++            0x08180FFFULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_0, mr_m4_0));
++
++        /* Allocate M4_1 partition */
++        BRD_ERR(rm_partition_alloc(pt_boot, &pt_m4_1, SC_FALSE, SC_TRUE,
++            SC_FALSE, SC_TRUE, SC_FALSE));
++
++        /* Mark all M4_1 subsystem resources as movable */
++        BRD_ERR(rm_set_subsys_rsrc_movable(pt_boot, SC_R_M4_1_PID0,
++            SC_TRUE));
++        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_M41_I2C0_SCL,
++            SC_P_M41_GPIO0_01, SC_TRUE));
++
++        /* Move some resources not in the M4_1 subsystem */
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_IRQSTR_M4_1,
++            SC_R_IRQSTR_M4_1, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_UART_2,
++            SC_R_UART_2, SC_TRUE));
++        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_UART0_CTS_B,
++            SC_P_UART0_RTS_B, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_6B,
++            SC_R_MU_6B, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_7B,
++            SC_R_MU_7B, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_9B,
++            SC_R_MU_9B, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_GPT_3,
++            SC_R_GPT_3, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_CAN_0,
++            SC_R_CAN_2, SC_TRUE));
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_FSPI_0,
++            SC_R_FSPI_0, SC_TRUE));
++
++        /* Move some pads not in the M4_1 subsystem */
++        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_FLEXCAN0_RX,
++            SC_P_FLEXCAN2_TX, SC_TRUE));
++        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_QSPI0A_DATA0,
++            SC_P_COMP_CTL_GPIO_1V8_3V3_QSPI0, SC_TRUE));
++
++        /* Move everything flagged as movable */
++        BRD_ERR(rm_move_all(pt_boot, pt_boot, pt_m4_1, SC_TRUE, SC_TRUE));
++
++        /* Allow all to access the SEMA42 */
++        BRD_ERR(rm_set_peripheral_permissions(pt_m4_1, SC_R_M4_1_SEMA42,
++            SC_RM_PT_ALL, SC_RM_PERM_FULL));
++
++        /* Move M4 1 TCM */
++        BRD_ERR(rm_find_memreg(pt_boot, &mr_m4_1, 0x038FE0000ULL,
++            0x038FE0000ULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_1, mr_m4_1));
++
++        /* Reserve DDR for M4_1 */
++        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_1, 0x088800000ULL,
++            0x08FFFFFFFULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_1, mr_m4_1));
++
++        /* Reserve FlexSPI for M4_1 */
++        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_1, 0x08181000ULL,
++            0x08280FFFULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_1, mr_m4_1));
++
++        /* Allow AP and M4_1 to use SYSTEM */
++        BRD_ERR(rm_set_peripheral_permissions(pt_m4_0, SC_R_SYSTEM,
++            pt_boot, SC_RM_PERM_SEC_RW));
++        BRD_ERR(rm_set_peripheral_permissions(pt_m4_0, SC_R_SYSTEM,
++            pt_m4_1, SC_RM_PERM_SEC_RW));
++
++        /* Move partition to be owned by SC */
++        BRD_ERR(rm_set_parent(pt_boot, pt_m4_0, SC_PT));
++        BRD_ERR(rm_set_parent(pt_boot, pt_m4_1, SC_PT));
++
++        /* Move boot to be owned by M4 0 */
++        if (no_ap != SC_FALSE)
++        {
++            BRD_ERR(rm_set_parent(SC_PT, pt_boot, pt_m4_0));
++        }
++
++        /* Allocate shared partition */
++        BRD_ERR(rm_partition_alloc(SC_PT, &pt_sh, SC_FALSE, SC_TRUE,
++            SC_FALSE, SC_FALSE, SC_FALSE));
++
++        /* Create shared memory space */
++        BRD_ERR(rm_memreg_frag(pt_boot, &mr_sh,
++            0x090000000ULL, 0x091FFFFFFULL));
++        BRD_ERR(rm_assign_memreg(pt_boot, pt_sh, mr_sh));
++        BRD_ERR(rm_set_memreg_permissions(pt_sh, mr_sh, pt_boot,
++            SC_RM_PERM_FULL));
++        BRD_ERR(rm_set_memreg_permissions(pt_sh, mr_sh, pt_m4_0,
++            SC_RM_PERM_FULL));
++        BRD_ERR(rm_set_memreg_permissions(pt_sh, mr_sh, pt_m4_1,
++            SC_RM_PERM_FULL));
++
++        /* Protect some resources */
++        /* M4 PID1-4 can be used to allow M4 to map to other SID */      
++        BRD_ERR(rm_assign_resource(pt_m4_0, pt_sh, SC_R_M4_0_PID1));
++        BRD_ERR(rm_assign_resource(pt_m4_0, pt_sh, SC_R_M4_0_PID2));
++        BRD_ERR(rm_assign_resource(pt_m4_0, pt_sh, SC_R_M4_0_PID3));
++        BRD_ERR(rm_assign_resource(pt_m4_0, pt_sh, SC_R_M4_0_PID4));
++        BRD_ERR(rm_assign_resource(pt_m4_1, pt_sh, SC_R_M4_1_PID1));
++        BRD_ERR(rm_assign_resource(pt_m4_1, pt_sh, SC_R_M4_1_PID2));
++        BRD_ERR(rm_assign_resource(pt_m4_1, pt_sh, SC_R_M4_1_PID3));
++        BRD_ERR(rm_assign_resource(pt_m4_1, pt_sh, SC_R_M4_1_PID4));
++
++        #ifdef BOARD_RM_DUMP
++            rm_dump(pt_boot);
++        #endif
++    }
++    else
++    {
++        err = SC_ERR_UNAVAILABLE;
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Early CPU query                                                          */
++/*--------------------------------------------------------------------------*/
++sc_bool_t board_early_cpu(sc_rsrc_t cpu)
++{
++    sc_bool_t rtn = SC_FALSE;
++
++    if ((cpu == SC_R_M4_0_PID0) || (cpu == SC_R_M4_1_PID0))
++    {
++        rtn = SC_TRUE;
++    }
++    
++    return rtn;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Transition external board-level SoC power domain                         */
++/*--------------------------------------------------------------------------*/
++void board_set_power_mode(sc_sub_t ss, uint8_t pd,
++    sc_pm_power_mode_t from_mode, sc_pm_power_mode_t to_mode)
++{
++    pmic_id_t pmic_id[2] = {0U, 0U};
++    uint32_t pmic_reg[2] = {0U, 0U};
++    uint8_t num_regs = 0U;
++
++    board_print(3, "board_set_power_mode(%s, %d, %d, %d)\n", snames[ss],
++        pd, from_mode, to_mode);
++
++    board_get_pmic_info(ss, pmic_id, pmic_reg, &num_regs);
++
++    /* Check for PMIC */
++    if (pmic_ver.device_id != 0U)
++    {
++        /* Flip switch */
++        if (to_mode > SC_PM_PW_MODE_OFF)
++        {
++            uint8_t idx = 0U;
++
++            while (idx < num_regs)
++            {
++                (void) PMIC_SET_MODE(pmic_id[idx], pmic_reg[idx],
++                    SW_RUN_PWM | SW_STBY_PWM);
++                idx++;
++            }
++            SystemTimeDelay(PMIC_MAX_RAMP);
++        }
++        else
++        {
++            uint8_t idx = 0U;
++
++            while (idx < num_regs)
++            {
++                (void) PMIC_SET_MODE(pmic_id[idx], pmic_reg[idx],
++                    SW_RUN_OFF);
++                idx++;
++            }
++        }
++    }
++}
++
++/*--------------------------------------------------------------------------*/
++/* Set the voltage for the given SS.                                        */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_set_voltage(sc_sub_t ss, uint32_t new_volt, uint32_t old_volt)
++{
++    sc_err_t err = SC_ERR_NONE;
++    pmic_id_t pmic_id[2] = {0U, 0U};
++    uint32_t pmic_reg[2] = {0U, 0U};
++    uint8_t num_regs = 0U;
++
++    board_print(3, "board_set_voltage(%s, %u, %u)\n", snames[ss], new_volt,
++        old_volt);
++
++    board_get_pmic_info(ss, pmic_id, pmic_reg, &num_regs);
++
++    /* Check for PMIC */
++    if (pmic_ver.device_id == 0U)
++    {
++        err = SC_ERR_NOTFOUND;
++    }
++    else
++    {
++        uint8_t idx = 0U;
++
++        while (idx < num_regs)
++        {
++            (void) PMIC_SET_VOLTAGE(pmic_id[idx], pmic_reg[idx], new_volt,
++                REG_RUN_MODE);
++            idx++;
++        }
++        if ((old_volt != 0U) && (new_volt > old_volt))
++        {
++            /* PMIC_MAX_RAMP_RATE is in nano Volts. */
++            uint32_t ramp_time = ((new_volt - old_volt) * 1000U)
++                / PMIC_MAX_RAMP_RATE;
++            SystemTimeDelay(ramp_time + 1U);
++        }
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Reset a board resource                                                   */
++/*--------------------------------------------------------------------------*/
++void board_rsrc_reset(sc_rm_idx_t idx, sc_rm_idx_t rsrc_idx)
++{
++}
++
++/*--------------------------------------------------------------------------*/
++/* Transition external board-level supply for board component               */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_trans_resource_power(sc_rm_idx_t idx, sc_rm_idx_t rsrc_idx,
++    sc_pm_power_mode_t from_mode, sc_pm_power_mode_t to_mode)
++{
++    sc_err_t err = SC_ERR_NONE;
++    
++    board_print(3, "board_trans_resource_power(%d, %s, %u, %u)\n", idx, 
++        rnames[rsrc_idx], from_mode, to_mode);
++
++    /* Init PMIC */
++    pmic_init();
++
++    /* Check if PMIC available */
++    ASRT_ERR(pmic_ver.device_id != 0U, SC_ERR_NOTFOUND);
++
++    /* Process resource */
++    if (err == SC_ERR_NONE)
++    {
++        switch (idx)
++        {
++            case BRD_R_BOARD_R2 : /* EMVSIM */
++                if (to_mode > SC_PM_PW_MODE_OFF)
++                {
++                    (void) PMIC_SET_VOLTAGE(PMIC_1_ADDR, PF8100_LDO1,
++                        3300, REG_RUN_MODE);
++                    (void) PMIC_SET_MODE(PMIC_1_ADDR, PF8100_LDO1,
++                        RUN_EN_STBY_EN);
++                }
++                else
++                {
++                    (void) PMIC_SET_MODE(PMIC_1_ADDR, PF8100_LDO1,
++                        RUN_OFF_STBY_OFF);
++                }
++                break;
++            case BRD_R_BOARD_R3 : /* USDHC2 on Base Board */
++                if (to_mode > SC_PM_PW_MODE_OFF)
++                {
++                    (void) PMIC_SET_MODE(PMIC_1_ADDR, PF8100_LDO2,
++                        RUN_EN_STBY_EN | VSELECT_EN);
++                }
++                else
++                {
++                    (void) PMIC_SET_MODE(PMIC_1_ADDR, PF8100_LDO2,
++                        RUN_OFF_STBY_OFF);
++                }
++                break;
++            case BRD_R_BOARD_R7 : 
++                /* Example for testing (use SC_R_BOARD_R7) */
++                board_print(3, "SC_R_BOARD_R7 from %u to %u\n",
++                    from_mode, to_mode);
++                break;
++            default :
++                err = SC_ERR_PARM;
++                break;
++        }
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Set board power mode                                                     */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_power(sc_pm_power_mode_t mode)
++{
++    sc_err_t err = SC_ERR_NONE;
++    static uint32_t vdd_memc_mode = 0U;
++
++    if (mode == SC_PM_PW_MODE_OFF)
++    {
++        /* Request power off */
++        SNVS_PowerOff();
++        err = snvs_err;
++        
++        /* Loop forever */
++        while(err == SC_ERR_NONE)
++        {
++            ; /* Intentional empty while */
++        }
++    }
++    else if (mode == SC_PM_PW_MODE_STBY)
++    {
++        /* 
++         * System standby (KS1) entry allows VDD_MEMC to be gated off.  Save
++         * current mode and switch off supply.
++         */
++        if (PMIC_GET_MODE(PMIC_1_ADDR, PF8100_SW5, &vdd_memc_mode) == SC_ERR_NONE)
++        {
++            (void) PMIC_SET_MODE(PMIC_1_ADDR, PF8100_SW5, SW_STBY_OFF | SW_RUN_OFF);
++        }
++    }
++    else if (mode == SC_PM_PW_MODE_ON)
++    {
++        /* 
++         * System standby (KS1) exit should switch on VDD_MEMC.  Restore previous
++         * mode saved during KS1 entry.
++         */
++        if (vdd_memc_mode != 0U)
++        {
++            (void) PMIC_SET_MODE(PMIC_1_ADDR, PF8100_SW5, vdd_memc_mode);
++        }
++    }
++    else
++    {
++        err = SC_ERR_PARM;
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Reset board                                                              */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_reset(sc_pm_reset_type_t type, sc_pm_reset_reason_t reason,
++    sc_rm_pt_t pt)
++{
++    if (type == SC_PM_RESET_TYPE_BOARD)
++    {
++        /* Request PMIC do a board reset */
++    }
++    else if (type == SC_PM_RESET_TYPE_COLD)
++    {
++        /* Request PMIC do a cold reset */
++    }
++    else
++    {
++        ; /* Intentional empty else */
++    }
++
++    #ifdef DEBUG
++        /* Dump out caller of reset request */
++        always_print("Board reset (%u, caller = 0x%08X)\n", reason, 
++            __builtin_return_address(0));
++    #endif
++    #ifdef ALT_DEBUG_UART
++        /* Invoke LPUART deinit to drain TX buffers if a warm reset follows */
++        LPUART_Deinit(LPUART_DEBUG);
++    #endif
++
++    /* Request a warm reset */
++    soc_set_reset_info(reason, pt);
++    NVIC_SystemReset();
++    
++    return SC_ERR_UNAVAILABLE;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Handle CPU reset event                                                   */
++/*--------------------------------------------------------------------------*/
++void board_cpu_reset(sc_rsrc_t resource, board_cpu_rst_ev_t reset_event,
++    sc_rm_pt_t pt)
++{
++    /* Note:  Production code should decide the response for each type
++     *        of reset event.  Options include allowing the SCFW to
++     *        reset the CPU or forcing a full system reset.  Additionally, 
++     *        the number of reset attempts can be tracked to determine the 
++     *        reset response.
++     */
++    
++    /* Check for M4 reset event */
++    if ((resource == SC_R_M4_0_PID0) || (resource == SC_R_M4_1_PID0))
++    {
++        always_print("CM4 reset event (rsrc = %d, event = %d)\n", resource, 
++            reset_event);
++
++        /* Treat lockups or parity/ECC reset events as board faults */
++        if ((reset_event == BOARD_CPU_RESET_LOCKUP) || 
++            (reset_event == BOARD_CPU_RESET_MEM_ERR))
++        {
++            board_fault(SC_FALSE, BOARD_BFAULT_CPU, pt);
++        }
++    }
++
++    /* Returning from this function will result in an attempt reset the
++       partition or board depending on the event and wdog action. */
++}
++
++/*--------------------------------------------------------------------------*/
++/* Trap partition reboot                                                    */
++/*--------------------------------------------------------------------------*/
++void board_reboot_part(sc_rm_pt_t pt, sc_pm_reset_type_t *type,
++    sc_pm_reset_reason_t *reason, sc_pm_power_mode_t *mode,
++    uint32_t *mask)
++{
++	board_print(3, "\nboard_reboot_part: type = %d, reason = %d, mode = %d, mask = %d\n",
++			*type, *reason, *mode, *mask);
++    /* Code can modify or log the parameters. Can also take another action like
++     * reset the board. After return from this function, the partition will be
++     * rebooted.
++     */
++    *mask = 0UL;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Trap partition reboot continue                                           */
++/*--------------------------------------------------------------------------*/
++void board_reboot_part_cont(sc_rm_pt_t pt, sc_rsrc_t *boot_cpu,
++    sc_rsrc_t *boot_mu, sc_rsrc_t *boot_dev, sc_faddr_t *boot_addr)
++{
++	board_print(3, "board_reboot_part_cont: boot_cpu = %s, boot_mu = %s, boot_dev = %s, boot_addr = 0x%08x\n",
++			rnames[*boot_cpu], rnames[*boot_mu], rnames[*boot_dev], (uint32_t) (*boot_addr & 0xFFFFFFFF));
++	if(*boot_cpu == SC_R_A72_0)
++	{
++		*boot_addr =  (sc_faddr_t) BL31_BASE_A53;
++	}
++    /* Code can modify boot parameters on a reboot. Called after partition
++     * is powered off but before it is powered back on and started.
++     */
++}
++
++/*--------------------------------------------------------------------------*/
++/* Return partition reboot timeout action                                   */
++/*--------------------------------------------------------------------------*/
++board_reboot_to_t board_reboot_timeout(sc_rm_pt_t pt)
++{
++    /* Return the action to take if a partition reboot requires continue
++     * ack for others and does not happen before timeout */
++    return BOARD_REBOOT_TO_FORCE;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Handle panic temp alarm                                                  */
++/*--------------------------------------------------------------------------*/
++void board_panic(sc_dsc_t dsc)
++{
++    #ifdef DEBUG
++        error_print("Panic temp (dsc=%d)\n", dsc);
++    #endif
++    
++    (void) board_reset(SC_PM_RESET_TYPE_BOARD, SC_PM_RESET_REASON_TEMP,
++        SC_PT);
++}
++
++/*--------------------------------------------------------------------------*/
++/* Handle fault or return from main()                                       */
++/*--------------------------------------------------------------------------*/
++void board_fault(sc_bool_t restarted, sc_bfault_t reason,
++    sc_rm_pt_t pt)
++{
++    /* Note, delete the DEBUG case if fault behavior should be like
++       typical production build even if DEBUG defined */
++
++    #ifdef DEBUG
++        /* Disable the WDOG */
++        WDOG32_Unlock(WDOG_SC);
++        WDOG32_SetTimeoutValue(WDOG_SC, 0xFFFF);
++        WDOG32_Disable(WDOG_SC);
++
++        /* Stop so developer can see WDOG occurred */
++        HALT;
++    #else
++        /* Was this called to report a previous WDOG restart? */
++        if (restarted == SC_FALSE)
++        {
++            /* Fault just occurred, need to reset */
++            (void) board_reset(SC_PM_RESET_TYPE_BOARD,
++                SC_PM_RESET_REASON_SCFW_FAULT, pt);
++
++            /* Wait for reset */
++            HALT;
++        }
++        /* Issue was before restart so just return */
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Handle SECO/SNVS security violation                                      */
++/*--------------------------------------------------------------------------*/
++void board_security_violation(void)
++{
++    always_print("SNVS security violation\n");
++}
++
++/*--------------------------------------------------------------------------*/
++/* Get the status of the ON/OFF button                                      */
++/*--------------------------------------------------------------------------*/
++sc_bool_t board_get_button_status(void)
++{
++    return SNVS_GetButtonStatus();
++}
++
++/*--------------------------------------------------------------------------*/
++/* Set control value                                                        */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_set_control(sc_rsrc_t resource, sc_rm_idx_t idx,
++    sc_rm_idx_t rsrc_idx, uint32_t ctrl, uint32_t val)
++{
++    sc_err_t err = SC_ERR_NONE;
++    
++    board_print(3,
++        "board_set_control(%s, %u, %u)\n", rnames[rsrc_idx], ctrl, val);
++
++    /* Init PMIC */
++    pmic_init();
++
++    /* Check if PMIC available */
++    ASRT_ERR(pmic_ver.device_id != 0U, SC_ERR_NOTFOUND);
++
++    if (err == SC_ERR_NONE)
++    {
++        /* Process control */
++        switch (resource)
++        {
++            case SC_R_PMIC_0 :
++                if (ctrl == SC_C_TEMP_HI)
++                {
++                    temp_alarm0 = 
++                        SET_PMIC_TEMP_ALARM(PMIC_0_ADDR, val);
++                }
++                else
++                {
++                    err = SC_ERR_PARM;
++                }
++                break;
++            case SC_R_PMIC_1 :
++                if (ctrl == SC_C_TEMP_HI)
++                {
++                    temp_alarm1 = 
++                        SET_PMIC_TEMP_ALARM(PMIC_1_ADDR, val);
++                }
++                else
++                {
++                    err = SC_ERR_PARM;
++                }
++                break;
++            case SC_R_BOARD_R7 :
++                if (ctrl == SC_C_VOLTAGE)
++                {
++                    /* Example (used for testing) */
++                    board_print(3, "SC_R_BOARD_R7 voltage set to %u\n",
++                        val);
++                }
++                else
++                {
++                    err = SC_ERR_PARM;
++                }
++                break;
++            default :
++                err = SC_ERR_PARM;
++                break;
++        }
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Get control value                                                        */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_get_control(sc_rsrc_t resource, sc_rm_idx_t idx,
++    sc_rm_idx_t rsrc_idx, uint32_t ctrl, uint32_t *val)
++{
++    sc_err_t err = SC_ERR_NONE;
++    
++    board_print(3,
++        "board_get_control(%s, %u)\n", rnames[rsrc_idx], ctrl);
++
++    /* Init PMIC */
++    pmic_init();
++
++    /* Check if PMIC available */
++    ASRT_ERR(pmic_ver.device_id != 0U, SC_ERR_NOTFOUND);
++
++    if (err == SC_ERR_NONE)
++    {
++        /* Process control */
++        switch (resource)
++        {
++            case SC_R_PMIC_0 :
++                if (ctrl == SC_C_TEMP)
++                {
++                    *val = GET_PMIC_TEMP(PMIC_0_ADDR);
++                }
++                else if (ctrl == SC_C_TEMP_HI)
++                {
++                    *val = temp_alarm0;
++                }
++                else
++                {
++                    err = SC_ERR_PARM;
++                }
++                break;
++            case SC_R_PMIC_1 :
++                if (ctrl == SC_C_TEMP)
++                {
++                    *val = GET_PMIC_TEMP(PMIC_1_ADDR);
++                }
++                else if (ctrl == SC_C_TEMP_HI)
++                {
++                    *val = temp_alarm1;
++                }
++                else
++                {
++                    err = SC_ERR_PARM;
++                }
++                break;
++            case SC_R_BOARD_R7 :
++                if (ctrl == SC_C_VOLTAGE)
++                {
++                    /* Example (used for testing) */
++                    board_print(3, "SC_R_BOARD_R7 voltage get\n");
++                }
++                else
++                {
++                    err = SC_ERR_PARM;
++                }
++                break;
++            default :
++                err = SC_ERR_PARM;
++                break;
++        }
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* PMIC Interrupt (INTB) handler                                            */
++/*--------------------------------------------------------------------------*/
++void PMIC_IRQHandler(void)
++{
++    if (PMIC_IRQ_SERVICE(PMIC_1_ADDR) != SC_FALSE)
++    {
++        ss_irq_trigger(SC_IRQ_GROUP_TEMP, SC_IRQ_TEMP_PMIC1_HIGH,
++            SC_PT_ALL);
++    }
++    if (PMIC_IRQ_SERVICE(PMIC_0_ADDR) != SC_FALSE)
++    {
++        ss_irq_trigger(SC_IRQ_GROUP_TEMP, SC_IRQ_TEMP_PMIC0_HIGH,
++            SC_PT_ALL);
++    }
++
++    NVIC_ClearPendingIRQ(PMIC_INT_IRQn);
++}
++
++/*--------------------------------------------------------------------------*/
++/* Button Handler                                                           */
++/*--------------------------------------------------------------------------*/
++void SNVS_Button_IRQHandler(void)
++{
++    SNVS_ClearButtonIRQ();
++
++    ss_irq_trigger(SC_IRQ_GROUP_WAKE, SC_IRQ_BUTTON,
++        SC_PT_ALL);
++}
++
++/*==========================================================================*/
++
++/*--------------------------------------------------------------------------*/
++/* Init the PMIC interface                                                  */
++/*--------------------------------------------------------------------------*/
++static void pmic_init(void)
++{
++    #ifndef EMUL
++        static sc_bool_t pmic_checked = SC_FALSE;
++        static lpi2c_master_config_t lpi2c_masterConfig;
++        sc_pm_clock_rate_t rate = SC_24MHZ;
++
++        /* See if we already checked for the PMIC */
++        if (pmic_checked == SC_FALSE)
++        {
++            sc_err_t err = SC_ERR_NONE;
++
++            pmic_checked = SC_TRUE;
++
++            /* Initialize the PMIC */
++            board_print(3, "Start PMIC init\n");
++
++            /* Power up the I2C and configure clocks */
++            pm_force_resource_power_mode_v(SC_R_SC_I2C,
++                SC_PM_PW_MODE_ON);
++            (void) pm_set_clock_rate(SC_PT, SC_R_SC_I2C,
++                SC_PM_CLK_PER, &rate);
++            (void) pm_force_clock_enable(SC_R_SC_I2C, SC_PM_CLK_PER,
++                SC_TRUE);
++
++            /* Initialize the pads used to communicate with the PMIC */
++            pad_force_mux(SC_P_PMIC_I2C_SDA, 0,
++                SC_PAD_CONFIG_OD_IN, SC_PAD_ISO_OFF);
++            (void) pad_set_gp_28fdsoi(SC_PT, SC_P_PMIC_I2C_SDA,
++                SC_PAD_28FDSOI_DSE_18V_1MA, SC_PAD_28FDSOI_PS_PU);
++            pad_force_mux(SC_P_PMIC_I2C_SCL, 0,
++                SC_PAD_CONFIG_OD_IN, SC_PAD_ISO_OFF);
++            (void) pad_set_gp_28fdsoi(SC_PT, SC_P_PMIC_I2C_SCL,
++                SC_PAD_28FDSOI_DSE_18V_1MA, SC_PAD_28FDSOI_PS_PU);
++
++            /* Initialize the PMIC interrupt pad */
++            pad_force_mux(SC_P_PMIC_INT_B, 0,
++                SC_PAD_CONFIG_NORMAL, SC_PAD_ISO_OFF);
++            (void) pad_set_gp_28fdsoi(SC_PT, SC_P_PMIC_INT_B,
++                SC_PAD_28FDSOI_DSE_18V_1MA, SC_PAD_28FDSOI_PS_PU);
++
++            /* Initialize the I2C used to communicate with the PMIC */
++            LPI2C_MasterGetDefaultConfig(&lpi2c_masterConfig);
++
++            /* MEK board spec is for 1M baud for PMIC I2C bus */
++            lpi2c_masterConfig.baudRate_Hz = 1000000U;
++            lpi2c_masterConfig.sdaGlitchFilterWidth_ns = 100U;
++            lpi2c_masterConfig.sclGlitchFilterWidth_ns = 100U;
++            LPI2C_MasterInit(LPI2C_PMIC, &lpi2c_masterConfig, SC_24MHZ);
++
++            /* Delay to allow I2C to settle */
++            SystemTimeDelay(2U);
++
++            pmic_ver = GET_PMIC_VERSION(PMIC_0_ADDR);
++            temp_alarm0 = SET_PMIC_TEMP_ALARM(PMIC_0_ADDR, PMIC_TEMP_MAX);
++            temp_alarm1 = SET_PMIC_TEMP_ALARM(PMIC_1_ADDR, PMIC_TEMP_MAX);
++
++            err |= pmic_ignore_current_limit(PMIC_0_ADDR);
++            err |= pmic_ignore_current_limit(PMIC_1_ADDR);
++
++            /* Adjust startup timing */
++            err |= pmic_update_timing(PMIC_0_ADDR);
++            err |= pmic_update_timing(PMIC_1_ADDR);
++
++            if (err != SC_ERR_NONE)
++            {
++                /* Loop so WDOG will expire */
++                HALT;
++            }
++
++            (void) PMIC_SET_MODE(PMIC_0_ADDR, PF8100_SW1, SW_RUN_PWM
++                | SW_STBY_PWM);
++            (void) PMIC_SET_MODE(PMIC_0_ADDR, PF8100_SW2, SW_RUN_PWM
++                | SW_STBY_PWM);
++            (void) PMIC_SET_MODE(PMIC_0_ADDR, PF8100_SW7, SW_RUN_PWM
++                | SW_STBY_PWM);
++            
++            /* Configure STBY voltage for SW1 (VDD_MAIN) */
++            if (board_parameter(BOARD_PARM_KS1_RETENTION)
++                == BOARD_PARM_KS1_RETENTION_ENABLE)
++            {
++                (void) PMIC_SET_VOLTAGE(PMIC_0_ADDR, PF8100_SW1, 800,
++                    REG_STBY_MODE);
++            }
++
++            /* Enable PMIC IRQ at NVIC level */
++            NVIC_EnableIRQ(PMIC_INT_IRQn);
++
++            board_print(3, "Finished  PMIC init\n\n");
++        }
++    #endif
++}
++
++/*--------------------------------------------------------------------------*/
++/* Bypass current limit for PF8100                                          */
++/*--------------------------------------------------------------------------*/
++static sc_err_t pmic_ignore_current_limit(uint8_t address)
++{
++    sc_err_t err = SC_ERR_NONE;
++    uint8_t idx;
++    uint8_t val = 0U;
++    static const pf8100_vregs_t switchers[11] =
++    {
++        PF8100_SW1,
++        PF8100_SW2,
++        PF8100_SW3,
++        PF8100_SW4,
++        PF8100_SW5,
++        PF8100_SW6,
++        PF8100_SW7,
++        PF8100_LDO1,
++        PF8100_LDO2,
++        PF8100_LDO3,
++        PF8100_LDO4
++    };
++
++    for (idx = 0U; idx < 11U; idx++)
++    {
++        /* Read the config register first */
++        err = PMIC_REGISTER_ACCESS(address, switchers[idx], SC_FALSE,
++            &val);
++
++        if (err == SC_ERR_NONE)
++        {
++            val |= 0x20U; /* set xx_ILIM_BYPASS */
++
++            /*
++             * Enable the UV_BYPASS and OV_BYPASS for all LDOs.
++             * The SDHC LDO2 constantly switches between 3.3V and 1.8V and
++             * the counters are incorrectly triggered.
++             * Also any other LDOs (like LDO1 on the board) that is
++             * enabled/disabled during suspend/resume can trigger the counters.
++             */
++             if ((switchers[idx] == PF8100_LDO1) ||
++                 (switchers[idx] == PF8100_LDO2) ||
++                 (switchers[idx] == PF8100_LDO3) ||
++                 (switchers[idx] == PF8100_LDO4))
++            {
++                val |= 0xC0U;
++            }
++
++            err = PMIC_REGISTER_ACCESS(address, switchers[idx], SC_TRUE,
++                &val);
++        }
++
++        if (err != SC_ERR_NONE)
++        {
++            break;
++        }
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Update power timing for PF8100                                           */
++/*--------------------------------------------------------------------------*/
++static sc_err_t pmic_update_timing(uint8_t address)
++{
++    sc_err_t err = SC_ERR_PARM;
++    uint8_t val = 0xED;
++
++    /*
++     * Add 60ms stable time for power down for:
++     *   PMIC 1 : LDO2, SW6, SW7
++     *   PMIC 2 : LDO2, SW5, SW6, SW7
++     * on i.mx8QM-mek
++     * board, otherwise system may reboot fail by mmc not power off
++     * clean
++     */
++    if (address == PMIC_0_ADDR)
++    {
++        err = SC_ERR_NONE;
++        err |= PMIC_REGISTER_ACCESS(address, 0x8D, SC_TRUE, &val);
++        err |= PMIC_REGISTER_ACCESS(address, 0x77, SC_TRUE, &val);
++        err |= PMIC_REGISTER_ACCESS(address, 0x7F, SC_TRUE, &val);
++        val = 0x29;
++        err |= PMIC_REGISTER_ACCESS(address, 0x3C, SC_TRUE, &val);
++    }
++    else if (address == PMIC_1_ADDR)
++    {
++        err = SC_ERR_NONE;
++        err |= PMIC_REGISTER_ACCESS(address, 0x8D, SC_TRUE, &val);
++        err |= PMIC_REGISTER_ACCESS(address, 0x6F, SC_TRUE, &val);
++        err |= PMIC_REGISTER_ACCESS(address, 0x77, SC_TRUE, &val);
++        err |= PMIC_REGISTER_ACCESS(address, 0x7F, SC_TRUE, &val);
++        val = 0x29;
++        err |= PMIC_REGISTER_ACCESS(address, 0x3C, SC_TRUE, &val);
++    }
++    else
++    {
++        ; /* Intentional empty else */
++    }
++
++    return err;
++}
++
++/*--------------------------------------------------------------------------*/
++/* Get the pmic ids and switchers connected to SS.                          */
++/*--------------------------------------------------------------------------*/
++static void board_get_pmic_info(sc_sub_t ss,pmic_id_t *pmic_id,
++    uint32_t *pmic_reg, uint8_t *num_regs)
++{
++    /* Map SS/PD to PMIC switch */
++    switch (ss)
++    {
++        case SC_SUBSYS_A53 :
++            pmic_init();
++            {/* PF8100_dual Card */
++                pmic_id[0] = PMIC_0_ADDR;
++                pmic_reg[0] = PF8100_SW5;
++                *num_regs = 1U;
++            }
++            break;
++        case SC_SUBSYS_A72 :
++            pmic_init();
++            {/* PF8100_dual Card */
++                pmic_id[0] = PMIC_0_ADDR;
++                pmic_reg[0] = PF8100_SW3;
++                pmic_id[1] = PMIC_0_ADDR;
++                pmic_reg[1] = PF8100_SW4;
++                *num_regs = 2U;
++            }
++            break;
++        case SC_SUBSYS_GPU_0 :
++            pmic_init();
++            {/* PF8100_dual Card */
++                pmic_id[0] = PMIC_1_ADDR;
++                pmic_reg[0] = PF8100_SW1;
++                pmic_id[1] = PMIC_1_ADDR;
++                pmic_reg[1] = PF8100_SW2;
++                *num_regs = 2U;
++            }
++            break;
++        case SC_SUBSYS_GPU_1 :
++            pmic_init();
++            {/* PF8100_dual Card */
++                pmic_id[0] = PMIC_1_ADDR;
++                pmic_reg[0] = PF8100_SW3;
++                pmic_id[1] = PMIC_1_ADDR;
++                pmic_reg[1] = PF8100_SW4;
++                *num_regs = 2U;
++            }
++            break;
++        default :
++            ; /* Intentional empty default */
++            break;
++    }
++}
++
++/*--------------------------------------------------------------------------*/
++/* Board tick                                                               */
++/*--------------------------------------------------------------------------*/
++void board_tick(uint16_t msec)
++{
++}
++
++/*--------------------------------------------------------------------------*/
++/* Board IOCTL function                                                     */
++/*--------------------------------------------------------------------------*/
++sc_err_t board_ioctl(sc_rm_pt_t caller_pt, sc_rsrc_t mu, uint32_t *parm1,
++    uint32_t *parm2, uint32_t *parm3)
++{
++    sc_err_t err = SC_ERR_PARM;
++
++    /* For test_misc */
++    if (*parm1 == 0xFFFFFFFEU)
++    {
++        *parm1 = *parm2 + *parm3;
++        *parm2 = mu;
++        *parm3 = caller_pt;
++
++        err = SC_ERR_NONE;
++    }
++
++    return err;
++}
++
++/**@}*/
++
+diff --git a/platform/board/mx8qm_mek_eco/board.h b/platform/board/mx8qm_mek_eco/board.h
+new file mode 100755
+index 0000000..3498e17
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/board.h
+@@ -0,0 +1,93 @@
++/*
++** ###################################################################
++**
++**     Copyright (c) 2016 Freescale Semiconductor, Inc.
++**     Copyright 2017-2018 NXP
++**
++**     Redistribution and use in source and binary forms, with or without modification,
++**     are permitted provided that the following conditions are met:
++**
++**     o Redistributions of source code must retain the above copyright notice, this list
++**       of conditions and the following disclaimer.
++**
++**     o Redistributions in binary form must reproduce the above copyright notice, this
++**       list of conditions and the following disclaimer in the documentation and/or
++**       other materials provided with the distribution.
++**
++**     o Neither the name of the copyright holder nor the names of its
++**       contributors may be used to endorse or promote products derived from this
++**       software without specific prior written permission.
++**
++**     THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++**     ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++**     WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++**     DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
++**     ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++**     (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++**     LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
++**     ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++**     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++**     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++**
++**
++** ###################################################################
++*/
++
++/*==========================================================================*/
++/*!
++ * @file
++ *
++ * Header file used to configure board specific features of the SCFW.
++ *
++ */
++/*==========================================================================*/
++
++#ifndef SC_BOARD_H
++#define SC_BOARD_H
++
++/* Includes */
++#include "drivers/pmic/fsl_pmic.h"
++
++/* Defines */
++
++#if 0
++    #define SKIP_DDR
++#endif
++
++/*! Configure PMIC I2C */
++#define LPI2C_PMIC              LPI2C_SC
++
++/*! Configure PMIC I2C instance */
++#define LPI2C_PMIC_INST         0U
++
++/* PMIC related defines */
++#define PMIC                    pf8100
++#define PMIC_0_ADDR             0x8U
++#define PMIC_1_ADDR             0x9U
++
++#define PMIC_TEMP_MAX           135U
++
++/*
++ * Configure Maximum Delay based on PMIC OTP settings:
++ * clock freq = 20MHZ, Regulator-freq = 2.5MHz, SWxDVS Ramp = 0,
++ * results in a ramp rate of 7,813mV/us.
++ * 1100 mV / 7.813 mV/us => 140.791 us
++ */
++#define PMIC_MAX_RAMP           141U    /* Max PMIC ramp delay in uS */
++#define PMIC_MAX_RAMP_RATE      7813U   /* PMIC voltage ramp (nV) per uS */
++
++/* 
++ * Resume from KS1 ramps VDD_MAIN 200 mV (800 mV to 1000 mV)
++ * PF8100 reg freq = 2.5 MHz, SWxDVS_RAMP = 0 => 7.813 mV/us
++ * 200 mV / 7.813 mV/us = 25.6 us ==> 26 us
++ * 
++ */
++#define BOARD_KS1_RESUME_USEC   26U
++#define BOARD_KS1_RETENTION     BOARD_PARM_KS1_RETENTION_ENABLE
++#define BOARD_KS1_ONOFF_WAKE    BOARD_PARM_KS1_ONOFF_WAKE_ENABLE
++
++#define ECOCKPIT_A72_IMG_OFFSET 0x100000
++#define ECOCKPIT_IMG_SIZE   0x100000 /* image size is same for A72 or A53 */
++
++#endif /* SC_BOARD_H */
++
+diff --git a/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser.cfg b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser.cfg
+new file mode 100755
+index 0000000..17cbfbc
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser.cfg
+@@ -0,0 +1,129 @@
++DEFINE	BD_DDR_RET_NUM_DRC   	2  // Number of DRCs in the SoC
++
++if (action != BOARD_DDR_COLD_INIT)
++{
++	return SC_ERR_NONE;
++}
++
++// DDR Stress Test Parser to obtain information from the OCRAM loaded by the stress test to initialize DDR
++
++typedef enum {
++    CMD_WRITE_DATA,
++    CMD_SET_BIT,
++    CMD_CLR_BIT,
++    CMD_CHECK_BIT_SET,
++    CMD_CHECK_BIT_CLR,
++    CMD_COPY_BIT,
++    CMD_DDR_PARAM,
++    CMD_RUN_CBT,
++    CMD_END=0xA5A5A5A5
++}dcd_cmd;
++
++typedef struct {
++    dcd_cmd cmd;
++    uint32_t addr;
++    uint32_t val;
++    uint32_t bit;
++} dcd_node;
++
++enum{
++    DRAM_TYPE,	
++    TRAIN_INFO,	
++    LP4X_MODE,	
++    DATA_WIDTH,	
++    NUM_PSTAT,	
++    FREQUENCY0
++};
++
++volatile dcd_node* dcd_ptr = (volatile dcd_node*)0x0011c000;
++   volatile uint32_t* dst_addr;
++   uint32_t regval,val,bitmask;
++   bool quit = false;
++   uint32_t ddr_pll;
++   board_print(1,"ddrc_init_dcd: 0x%x\r\n",(uint32_t)dcd_ptr);
++
++   while(!quit){
++	dst_addr = (volatile uint32_t*)dcd_ptr->addr;
++	val = dcd_ptr->val;
++	bitmask = dcd_ptr->bit;
++
++	switch (dcd_ptr->cmd){
++	case CMD_END:
++	boot_print(1,"DCD command finished\r\n");
++	err = SC_ERR_UNAVAILABLE;
++	quit = true;
++	break;
++
++	case CMD_WRITE_DATA:
++	boot_print(1,"CMD_WRITE_DATA: dst_addr=0x%x,bitmask=0x%x,val=0x%x\r\n",dst_addr,bitmask,val);
++	*dst_addr = val;
++	break;
++
++	case CMD_SET_BIT:
++	boot_print(1,"CMD_SET_BIT: dst_addr=0x%x,bitmask=0x%x,val=0x%x\r\n",dst_addr,bitmask,val);
++	regval = *dst_addr;
++	regval |= val;
++	*dst_addr = regval;
++	break;
++
++	case CMD_CLR_BIT:
++	boot_print(1,"CMD_CLR_BIT: dst_addr=0x%x,bitmask=0x%x,val=0x%x\r\n",dst_addr,bitmask,val);
++	regval = *dst_addr;
++	regval &= ~val;
++	*dst_addr = regval;
++	break;
++
++	case CMD_CHECK_BIT_SET:
++	boot_print(1,"CMD_CHECK_BIT_SET: dst_addr=0x%x,bitmask=0x%x,val=0x%x ...",dst_addr,bitmask,val);
++	do{
++	    regval = *dst_addr;
++	    if((regval&val)==val)
++		break;
++	}while(1);
++	boot_print(1,"Done\r\n");
++	break;
++
++	case CMD_CHECK_BIT_CLR:
++	boot_print(1,"CMD_CHECK_BIT_CLR: dst_addr=0x%x,bitmask=0x%x,val=0x%x...",dst_addr,bitmask,val);
++	do{
++	    regval = *dst_addr;
++	    if((regval & val)==0)
++		break;
++	}while(1);
++	boot_print(1,"Done\r\n");
++	break;
++
++	case CMD_DDR_PARAM:
++	boot_print(1,"CMD_DDR_PARAM: dst_addr=0x%x,bitmask=0x%x,val=0x%x...",dst_addr,bitmask,val);
++	if(dcd_ptr->addr != FREQUENCY0)
++	{
++            err = SC_ERR_UNAVAILABLE;
++            quit = true;
++	    boot_print(1,"Failed\r\n");
++	    break;
++	}
++        ddr_pll = val*1000000/2;
++	pm_set_clock_rate(SC_PT, SC_R_DRC_0, SC_PM_CLK_MISC0, &ddr_pll);
++	pm_set_clock_rate(SC_PT, SC_R_DRC_1, SC_PM_CLK_MISC0, &ddr_pll);
++	boot_print(1,"Done\r\n");
++	break;
++
++	case CMD_RUN_CBT:
++	boot_print(1,"CMD_RUN_CBT: param_1=0x%x,param_2=0x%x,param_3=0x%x...",dcd_ptr->addr,dcd_ptr->bit,dcd_ptr->val);
++	run_cbt(dcd_ptr->addr, dcd_ptr->bit, dcd_ptr->val);
++	boot_print(1,"Done\r\n");
++    break;
++    
++	default:
++	boot_print(1,"Unknown DCD command(0x%x):dst_addr=0x%x,bit=0x%x,val=0x%x\r\n",dcd_ptr->cmd,dst_addr,bitmask,val);
++	err = SC_ERR_UNAVAILABLE;
++	quit = true;
++	break;
++	}
++
++	dcd_ptr++;
++   }
++
++
++
++
+diff --git a/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser_DRC0_only.cfg b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser_DRC0_only.cfg
+new file mode 100755
+index 0000000..e9c2c02
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser_DRC0_only.cfg
+@@ -0,0 +1,128 @@
++DEFINE	BD_DDR_RET_NUM_DRC   	1  // One DRC in the SoC; DRC0 only 
++
++if (action != BOARD_DDR_COLD_INIT)
++{
++	return SC_ERR_NONE;
++}
++
++// DDR Stress Test Parser to obtain information from the OCRAM loaded by the stress test to initialize DDR
++
++typedef enum {
++    CMD_WRITE_DATA,
++    CMD_SET_BIT,
++    CMD_CLR_BIT,
++    CMD_CHECK_BIT_SET,
++    CMD_CHECK_BIT_CLR,
++    CMD_COPY_BIT,
++    CMD_DDR_PARAM,
++    CMD_RUN_CBT,
++    CMD_END=0xA5A5A5A5
++}dcd_cmd;
++
++typedef struct {
++    dcd_cmd cmd;
++    uint32_t addr;
++    uint32_t val;
++    uint32_t bit;
++} dcd_node;
++
++enum{
++    DRAM_TYPE,	
++    TRAIN_INFO,	
++    LP4X_MODE,	
++    DATA_WIDTH,	
++    NUM_PSTAT,	
++    FREQUENCY0
++};
++
++volatile dcd_node* dcd_ptr = (volatile dcd_node*)0x0011c000;
++   volatile uint32_t* dst_addr;
++   uint32_t regval,val,bitmask;
++   bool quit = false;
++   uint32_t ddr_pll;
++   board_print(1,"ddrc_init_dcd: 0x%x\r\n",(uint32_t)dcd_ptr);
++
++   while(!quit){
++	dst_addr = (volatile uint32_t*)dcd_ptr->addr;
++	val = dcd_ptr->val;
++	bitmask = dcd_ptr->bit;
++
++	switch (dcd_ptr->cmd){
++	case CMD_END:
++	boot_print(1,"DCD command finished\r\n");
++	err = SC_ERR_UNAVAILABLE;
++	quit = true;
++	break;
++
++	case CMD_WRITE_DATA:
++	boot_print(1,"CMD_WRITE_DATA: dst_addr=0x%x,bitmask=0x%x,val=0x%x\r\n",dst_addr,bitmask,val);
++	*dst_addr = val;
++	break;
++
++	case CMD_SET_BIT:
++	boot_print(1,"CMD_SET_BIT: dst_addr=0x%x,bitmask=0x%x,val=0x%x\r\n",dst_addr,bitmask,val);
++	regval = *dst_addr;
++	regval |= val;
++	*dst_addr = regval;
++	break;
++
++	case CMD_CLR_BIT:
++	boot_print(1,"CMD_CLR_BIT: dst_addr=0x%x,bitmask=0x%x,val=0x%x\r\n",dst_addr,bitmask,val);
++	regval = *dst_addr;
++	regval &= ~val;
++	*dst_addr = regval;
++	break;
++
++	case CMD_CHECK_BIT_SET:
++	boot_print(1,"CMD_CHECK_BIT_SET: dst_addr=0x%x,bitmask=0x%x,val=0x%x ...",dst_addr,bitmask,val);
++	do{
++	    regval = *dst_addr;
++	    if((regval&val)==val)
++		break;
++	}while(1);
++	boot_print(1,"Done\r\n");
++	break;
++
++	case CMD_CHECK_BIT_CLR:
++	boot_print(1,"CMD_CHECK_BIT_CLR: dst_addr=0x%x,bitmask=0x%x,val=0x%x...",dst_addr,bitmask,val);
++	do{
++	    regval = *dst_addr;
++	    if((regval & val)==0)
++		break;
++	}while(1);
++	boot_print(1,"Done\r\n");
++	break;
++
++	case CMD_DDR_PARAM:
++	boot_print(1,"CMD_DDR_PARAM: dst_addr=0x%x,bitmask=0x%x,val=0x%x...",dst_addr,bitmask,val);
++	if(dcd_ptr->addr != FREQUENCY0)
++	{
++            err = SC_ERR_UNAVAILABLE;
++            quit = true;
++	    boot_print(1,"Failed\r\n");
++	    break;
++	}
++        ddr_pll = val*1000000/2;
++	pm_set_clock_rate(SC_PT, SC_R_DRC_0, SC_PM_CLK_MISC0, &ddr_pll);
++	boot_print(1,"Done\r\n");
++	break;
++
++	case CMD_RUN_CBT:
++	boot_print(1,"CMD_RUN_CBT: param_1=0x%x,param_2=0x%x,param_3=0x%x...",dcd_ptr->addr,dcd_ptr->bit,dcd_ptr->val);
++	run_cbt(dcd_ptr->addr, dcd_ptr->bit, dcd_ptr->val);
++	boot_print(1,"Done\r\n");
++    break;
++    
++	default:
++	boot_print(1,"Unknown DCD command(0x%x):dst_addr=0x%x,bit=0x%x,val=0x%x\r\n",dcd_ptr->cmd,dst_addr,bitmask,val);
++	err = SC_ERR_UNAVAILABLE;
++	quit = true;
++	break;
++	}
++
++	dcd_ptr++;
++   }
++
++
++
++
+diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz.cfg
+new file mode 100755
+index 0000000..28835c4
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz.cfg
+@@ -0,0 +1,519 @@
++#define __ASSEMBLY__								
++								
++#include <MX8/MX8_ddrc.h>								
++#include <MX8/MX8_ddr_phy.h>								
++								
++/*! Configure DDR retention support */								
++DEFINE	BD_DDR_RET		/* Add/remove DDR retention */					
++								
++DEFINE	BD_DDR_RET_NUM_DRC   	2	/* Number for DRCs to retain */					
++DEFINE	BD_DDR_RET_NUM_REGION	6	/* DDR regions to save/restore */					
++/* Descriptor values for DDR regions saved/restored during retention */								
++DEFINE	BD_DDR_RET_REGION1_ADDR	0x80000000						
++DEFINE	BD_DDR_RET_REGION1_SIZE	64						
++DEFINE	BD_DDR_RET_REGION2_ADDR	0x80008040						
++DEFINE	BD_DDR_RET_REGION2_SIZE	16						
++DEFINE	BD_DDR_RET_REGION3_ADDR	0x80010000						
++DEFINE	BD_DDR_RET_REGION3_SIZE	48						
++DEFINE	BD_DDR_RET_REGION4_ADDR	0x80001000						
++DEFINE	BD_DDR_RET_REGION4_SIZE	64						
++DEFINE	BD_DDR_RET_REGION5_ADDR	0x80009040						
++DEFINE	BD_DDR_RET_REGION5_SIZE	16						
++DEFINE	BD_DDR_RET_REGION6_ADDR	0x80011000						
++DEFINE	BD_DDR_RET_REGION6_SIZE	48						
++								
++/*								
++ * Device Configuration Data (DCD) Version 17								
++ *								
++ * Each entry must have the format:								
++ * Addr-type           Address        Value								
++ *								
++ * where:								
++ * Addr-type register length (1,2 or 4 bytes)								
++ * Address   absolute address of the register								
++ * value   value to be stored in the register								
++ */								
++								
++#ifndef SCFW_DCD								
++/* For 1600MHz DDR, DRC 800MHz operation */								
++DATA 4	0xff148000	0x00000885	/* DRC0 bringup */					
++DATA 4	0xff1a0000	0x00000885	/* DRC1 bringup */					
++#else								
++if (action != BOARD_DDR_COLD_INIT)								
++{								
++	return SC_ERR_NONE;							
++}								
++								
++								
++								
++								
++								
++								
++								
++								
++								
++								
++								
++								
++								
++#endif								
++								
++DATA 4	0x41a40208	0x1						
++DATA 4	0x41d00208	0x1						
++DATA 4	0x41a40040	0xB						
++DATA 4	0x41d00040	0xB						
++DATA 4	0x41a40204	0x1						
++DATA 4	0x41d00204	0x1						
++/* DRAM 0 controller configuration begin */								
++DATA 4 	DDRC_MSTR_0   	0xC3080020	// Set LPDDR4, BL = 16 and active ranks					
++DATA 4 	DDRC_DERATEEN_0   	0x00000213	// derate enable, derate values, byte to read MRR data					
++DATA 4 	DDRC_DERATEINT_0   	0x0186A000	// derate MR4 interval read					
++DATA 4 	DDRC_RFSHCTL0_0 	0x0021F000						
++DATA 4 	DDRC_RFSHTMG_0 	0x006100E0	// tREFI, tRFC					
++DATA 4 	DDRC_INIT0_0   	0x4003061C	// pre_cke = 2ms, post_cke = 2us					
++DATA 4 	DDRC_INIT1_0   	0x009E0000	// dram_rstn = 200us					
++DATA 4 	DDRC_INIT3_0   	0x0054002D	// MR1, MR2					
++DATA 4 	DDRC_INIT4_0   	0x00F10000	// MR3, MR13					
++DATA 4	DDRC_RANKCTL_0  	0x0000066F	// diff_rank_wr_gap, diff_rank_rd_gap, max_rank_rd 					
++DATA 4	DDRC_DRAMTMG0_0 	0x1A201B22	// wr2pr, tFAW, tRASmax, tRASmin					
++DATA 4	DDRC_DRAMTMG1_0 	0x00060633	// tXP, rd2pre, tRC					
++DATA 4	DDRC_DRAMTMG2_0 	0x07101617	// WL, RL, rd2wr, wr2rd					
++DATA 4	DDRC_DRAMTMG3_0 	0x00C0C000	// tmrw, tmrd, tmod					
++DATA 4	DDRC_DRAMTMG4_0 	0x0F04080F	// trcd, tccd, trrd, trp					
++DATA 4	DDRC_DRAMTMG5_0 	0x02040C0C	// tCKCKEH, tCKCKEL, tckesr, tcke					
++DATA 4	DDRC_DRAMTMG6_0 	0x02020007	// tckdpde, tckdpdx, tckcsx					
++DATA 4	DDRC_DRAMTMG7_0 	0x00000401	// tckpde, tckpdx					
++DATA 4	DDRC_DRAMTMG12_0	0x00020610	// tCMDCKE, tCKEHCMD					
++DATA 4	DDRC_DRAMTMG13_0	0x0C100002	// tODTLoff, tCCDMW, tPPD					
++DATA 4	DDRC_DRAMTMG14_0	0x000000E6	// txsr					
++DATA 4	DDRC_ZQCTL0_0   	0x03200018	// tZQCAL, tZQLAT					
++DATA 4	DDRC_ZQCTL1_0   	0x028061A8	// tZQReset, tzq_short_interval					
++DATA 4	DDRC_DFITMG0_0  	0x049E820C	// dfi_t_ctrl_delay, dfi_t_rddata_en, dfi_tphy_wrdata, dfi_tphy_wrlat					
++DATA 4	DDRC_DFITMG1_0  	0x00070303	// dfi_t_wrdata_delay, dfi_t_dram_clk_disable, dfi_t_dram_clk_enable					
++DATA 4	DDRC_DFITMG2_0  	0x00001C0A	// dfi_tphy_rdcslat, dfi_tphy_wrcslat					
++DATA 4	DDRC_DFIMISC_0  	0x00000005	// dfi_data_cs_polarity					
++DATA 4	DDRC_DFIUPD0_0  	0x00400003	// Disable the automatic dfi_ctrlupd_req generation					
++DATA 4	DDRC_DFIUPD1_0  	0x008000A0	// dfi_ctrlupd_req generation interval generation (min and max)					
++DATA 4	DDRC_DFIUPD2_0  	0x80000000	// dfi_phyupd_en					
++DATA 4	DDRC_ADDRMAP0_0 	0x00000007	// addrmap_cs_bit0					
++DATA 4	DDRC_ADDRMAP3_0 	0x00000000	// addrmap_col_b9, addrmap_col_b8, addrmap_col_b7, addrmap_col_b6					
++DATA 4	DDRC_ADDRMAP4_0 	0x00001F1F	// addrmap_col_b10 and addrmap_col_b11 set to de-activated					
++DATA 4	DDRC_ADDRMAP1_0 	0x00080808	// addrmap_bank_b2, addrmap_bank_b1, addrmap_bank_b0					
++DATA 4	DDRC_ADDRMAP5_0 	0x08080808	// addrmap_row_b11, addrmap_row_b10_b2, addrmap_row_b1, addrmap_row_b0					
++DATA 4	DDRC_ADDRMAP6_0 	0x48080808	// addrmap_row_b15, addrmap_row_b14, addrmap_row_b13, addrmap_row_b12					
++DATA 4	DDRC_DBICTL_0   	0x00000007	// rd_dbi_en=wr_dbi_en=dm_en=1					
++DATA 4	DDRC_ODTMAP_0   	0x00002211	// rank[3:0]_wr_odt, rank[3:0]_wr_odt					
++DATA 4	DDRC_PCTRL_0_0  	0x00000001	// Enable port 0					
++DATA 4	DDRC_DFITMG0_SHADOW_0	0x00808000						
++								
++/* DRAM 1 controller initialization */								
++DATA 4	DDRC_MSTR_1     	0xC3080020	// Set LPDDR4, BL = 16 and active ranks					
++DATA 4	DDRC_DERATEEN_1 	0x00000213	// derate enable, derate values, byte to read MRR data					
++DATA 4	DDRC_DERATEINT_1	0x0186A000	// derate MR4 interval read					
++DATA 4	DDRC_RFSHCTL0_1 	0x0021F000						
++DATA 4	DDRC_RFSHTMG_1  	0x006100E0	// tREFI, tRFC					
++DATA 4	DDRC_INIT0_1    	0x4003061C	// pre_cke = 2ms, post_cke = 2us					
++DATA 4	DDRC_INIT1_1    	0x009E0000	// dram_rstn = 200us					
++DATA 4	DDRC_INIT3_1    	0x0054002D	// MR1, MR2					
++DATA 4	DDRC_INIT4_1    	0x00F10000	// MR3, MR13					
++DATA 4	DDRC_RANKCTL_1  	0x0000066F	// diff_rank_wr_gap, diff_rank_rd_gap, max_rank_rd 					
++DATA 4	DDRC_DRAMTMG0_1 	0x1A201B22	// wr2pr, tFAW, tRASmax, tRASmin					
++DATA 4	DDRC_DRAMTMG1_1 	0x00060633	// tXP, rd2pre, tRC					
++DATA 4	DDRC_DRAMTMG2_1 	0x07101617	// WL, RL, rd2wr, wr2rd					
++DATA 4	DDRC_DRAMTMG3_1 	0x00C0C000	// tmrw, tmrd, tmod					
++DATA 4	DDRC_DRAMTMG4_1 	0x0F04080F	// trcd, tccd, trrd, trp					
++DATA 4	DDRC_DRAMTMG5_1 	0x02040C0C	// tCKCKEH, tCKCKEL, tckesr, tcke					
++DATA 4	DDRC_DRAMTMG6_1 	0x02020007	// tckdpde, tckdpdx, tckcsx					
++DATA 4	DDRC_DRAMTMG7_1 	0x00000401	// tckpde, tckpdx					
++DATA 4	DDRC_DRAMTMG12_1	0x00020610	// tCMDCKE, tCKEHCMD					
++DATA 4	DDRC_DRAMTMG13_1	0x0C100002	// tODTLoff, tCCDMW, tPPD					
++DATA 4	DDRC_DRAMTMG14_1	0x000000E6	// txsr					
++DATA 4	DDRC_ZQCTL0_1   	0x03200018	// tZQCAL, tZQLAT					
++DATA 4	DDRC_ZQCTL1_1   	0x028061A8	// tZQReset, tzq_short_interval					
++DATA 4	DDRC_DFITMG0_1  	0x049E820C	// dfi_t_ctrl_delay, dfi_t_rddata_en, dfi_tphy_wrdata, dfi_tphy_wrlat					
++DATA 4	DDRC_DFITMG1_1  	0x00070303	// dfi_t_wrdata_delay, dfi_t_dram_clk_disable, dfi_t_dram_clk_enable					
++DATA 4	DDRC_DFITMG2_1  	0x00001C0A	// dfi_tphy_rdcslat, dfi_tphy_wrcslat					
++DATA 4	DDRC_DFIMISC_1  	0x00000005	// dfi_data_cs_polarity					
++DATA 4	DDRC_DFIUPD0_1  	0x00400003	// Disable the automatic dfi_ctrlupd_req generation					
++DATA 4	DDRC_DFIUPD1_1  	0x008000A0	// dfi_ctrlupd_req generation interval generation (min and max)					
++DATA 4	DDRC_DFIUPD2_1  	0x80000000	// dfi_phyupd_en					
++DATA 4	DDRC_ADDRMAP0_1 	0x00000007	// addrmap_cs_bit0					
++DATA 4	DDRC_ADDRMAP3_1 	0x00000000	// addrmap_col_b9, addrmap_col_b8, addrmap_col_b7, addrmap_col_b6					
++DATA 4	DDRC_ADDRMAP4_1 	0x00001F1F	// addrmap_col_b10 and addrmap_col_b11 set to de-activated					
++DATA 4	DDRC_ADDRMAP1_1 	0x00080808	// addrmap_bank_b2, addrmap_bank_b1, addrmap_bank_b0					
++DATA 4	DDRC_ADDRMAP5_1 	0x08080808	// addrmap_row_b11, addrmap_row_b10_b2, addrmap_row_b1, addrmap_row_b0					
++DATA 4	DDRC_ADDRMAP6_1 	0x48080808	// addrmap_row_b15, addrmap_row_b14, addrmap_row_b13, addrmap_row_b12					
++DATA 4	DDRC_DBICTL_1   	0x00000007	// rd_dbi_en=wr_dbi_en=dm_en=1					
++DATA 4	DDRC_ODTMAP_1   	0x00002211	// rank[3:0]_wr_odt, rank[3:0]_wr_odt					
++DATA 4	DDRC_PCTRL_0_1  	0x00000001	// Enable port 0					
++DATA 4	DDRC_DFITMG0_SHADOW_1	0x00808000						
++								
++//Performance optimizations								
++DATA 4	DDRC_PWRCTL_0 	0x0000010A						
++DATA 4	DDRC_PWRCTL_1 	0x0000010A						
++DATA 4	DDRC_PWRTMG_0 	0x00402010						
++DATA 4	DDRC_PWRTMG_1 	0x00402010						
++DATA 4	DDRC_HWLPCTL_0	0x06FF0001						
++DATA 4	DDRC_HWLPCTL_1	0x06FF0001						
++								
++//Enables DFI Low Power interface								
++DATA 4	DDRC_DFILPCFG0_0	0x0700B100						
++DATA 4	DDRC_DFILPCFG0_1	0x0700B100						
++								
++DATA 4	0x41a40208	0x1						
++DATA 4	0x41d00208	0x1						
++DATA 4 	0x41a40040	0xF						
++DATA 4	0x41d00040	0xF						
++DATA 4 	0x41a40204	0x1						
++DATA 4	0x41d00204	0x1						
++//-------------------------------------------								
++// Configure registers for PHY initialization								
++//--------------------------------------------								
++// Set-up DRAM Configuration Register								
++DATA 4	DDR_PHY_DCR_0	0x0000040D	// LPDDR4 selection with 8 bank					
++// Set-up byte and bit swapping registers								
++DATA 4	DDR_PHY_PGCR8_0    	0x000F0009						
++DATA 4	DDR_PHY_DX0DQMAP0_0	0x00003465	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX0DQMAP1_0	0x00008271	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX1DQMAP0_0	0x00075632	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX1DQMAP1_0	0x00008104	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX2DQMAP0_0	0x00064732	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX2DQMAP1_0	0x00008015	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX3DQMAP0_0	0x00012574	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX3DQMAP1_0	0x00008360	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_CATR0_0    	0x00141032	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++DATA 4	DDR_PHY_CATR1_0    	0x0013AAAA	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++// Set-up PHY General Configuration Register								
++SET_BIT 4 	DDR_PHY_PGCR1_0	0x000A0000	// DISDIC=1 (no uMCTL2 commands can go to memory) and WDQSEXT=1					
++DATA 4	DDR_PHY_PGCR0_0	0x87001E00	// Set ADCP=1 (Address Copy)					
++DATA 4	DDR_PHY_PGCR2_0	0x00F0D879	// Set tREFPRD 					
++DATA 4	DDR_PHY_PGCR3_0	0x050A1080	// CKEN/CKNEN toggling and polarity					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR0_0	0x64032010	// tPLLPD, tPLLGS, tPHYRST					
++DATA 4	DDR_PHY_PTR1_0	0x4E201C20	// tPLLLOCK, tPLLRST					
++// Set-up PLL Control Register								
++DATA 4	DDR_PHY_PLLCR0_0      	0x001C0000						
++DATA 4	DDR_PHY_DX8SLbPLLCR0_0	0x001C0000						
++// Set-up Impedance Control Register								
++DATA 4	DDR_PHY_ZQCR_0	0x008C2C58	// Set ODT_MODE=0b10(LPDDR4 stype pullup)					
++// ZPROG_DRAM_ODT and ZPROG_HOST_ODT 								
++DATA 4 	DDR_PHY_ZQ0PR0_0	0x0001B9BB	// Impedance control for CA bus					
++DATA 4 	DDR_PHY_ZQ1PR0_0	0x0001B9BB	// Impedance control for DQ bus					
++// Set-up PHY Initialization Register								
++DATA 4 	DDR_PHY_PIR_0	0x32						
++// Launch initialization (set bit 0)								
++DATA 4	DDR_PHY_PIR_0	0x33						
++//-------------------------------------------								
++// Configure registers for PHY initialization								
++//-------------------------------=------------								
++// Set-up DRAM 1 PHY Configuration Register								
++DATA 4	DDR_PHY_DCR_1	0x0000040D	// LPDDR4 selection with 8 bank					
++// Set-up byte and bit swapping registers								
++DATA 4	DDR_PHY_PGCR8_1	0x000F0009						
++DATA 4	DDR_PHY_DX0DQMAP0_1	0x00003465	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX0DQMAP1_1	0x00008271	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX1DQMAP0_1	0x00075632	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX1DQMAP1_1	0x00008104	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX2DQMAP0_1	0x00064732	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX2DQMAP1_1	0x00008015	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX3DQMAP0_1	0x00012574	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX3DQMAP1_1	0x00008360	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_CATR0_1	0x00141032	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++DATA 4	DDR_PHY_CATR1_1	0x0013AAAA	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++// Set-up PHY General Configuration Register								
++SET_BIT 4	DDR_PHY_PGCR1_1	0x000A0000	// DISDIC=1 (no uMCTL2 commands can go to memory) and WDQSEXT=1					
++DATA 4	DDR_PHY_PGCR0_1	0x87001E00	// Set ADCP=1 (Address Copy)					
++DATA 4	DDR_PHY_PGCR2_1	0x00F0D879	// Set tREFPRD 					
++DATA 4	DDR_PHY_PGCR3_1	0x050A1080	// CKEN/CKNEN toggling and polarity					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR0_1	0x64032010	// tPLLPD, tPLLGS, tPHYRST					
++DATA 4	DDR_PHY_PTR1_1	0x4E201C20	// tPLLLOCK, tPLLRST					
++// Set-up PLL Control Register								
++DATA 4	DDR_PHY_PLLCR0_1	0x001C0000						
++DATA 4	DDR_PHY_DX8SLbPLLCR0_1	0x001C0000						
++// Set-up Impedance Control Register								
++DATA 4	DDR_PHY_ZQCR_1	0x008C2C58	// Set ODT_MODE=0b10(LPDDR4 stype pullup)					
++// ZPROG_DRAM_ODT and ZPROG_HOST_ODT 								
++DATA 4	DDR_PHY_ZQ0PR0_1	0x0001B9BB	// Impedance control for CA bus					
++DATA 4	DDR_PHY_ZQ1PR0_1	0x0001B9BB	// Impedance control for DQ bus					
++// Set-up PHY Initialization Register								
++DATA 4	DDR_PHY_PIR_1	0x32						
++// Launch initialization (set bit 0)								
++DATA 4	DDR_PHY_PIR_1	0x33						
++//-------------------------------------------								
++// Configure registers for DRAM initialization								
++//-------------------------------------------								
++// Set-up Mode Register								
++// MR0, MR3, MR4, MR5 MR6 are untouched								
++DATA 4	DDR_PHY_MR1_0	0x54	// Set BL, WR-PRE, nWR, RPST					
++DATA 4	DDR_PHY_MR2_0	0x2D	// Set RL/WL					
++DATA 4	DDR_PHY_MR3_0	0xF1	// Set drive strength 					
++								
++DATA 4	DDR_PHY_MR11_0	0x54	// Set CA ODT and DQ ODT					
++DATA 4	DDR_PHY_MR22_0	0x15	// Set ODTE-CS=1 (overrides ODT_CA for CS1 as CS not shared between ranks)					
++/* LPDDR4 mode register writes for CA and DQ VREF settings */								
++DATA 4	DDR_PHY_MR12_0	0x48						
++DATA 4	DDR_PHY_MR14_0	0x48						
++// Set-up DRAM Timing Parameters Register								
++// DTPR6 is untouched								
++DATA 4	DDR_PHY_DTPR0_0	0x1044220C	// tRRD, tRAS, tRP, tRTP					
++DATA 4	DDR_PHY_DTPR1_0	0x28400417	// tWLMRD, tFAW, tODTUP, tMRD					
++DATA 4	DDR_PHY_DTPR2_0	0x006CA1CC	// tRTW, tRTODT, tCMDCKE, tCKE, tVRCG, tXS					
++DATA 4	DDR_PHY_DTPR3_0	0x01800602	// tODX, tCCD, tDLLK, tDQSCKmax, tDQSCK 					
++DATA 4	DDR_PHY_DTPR4_0	0x01C02B0F	// tRFC, tWLO, tXP					
++DATA 4	DDR_PHY_DTPR5_0	0x21651D11	// tRC, tRCD, tWTR					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR2_0	0x000A3DEF						
++DATA 4	DDR_PHY_PTR3_0	0x0030D400	// tDINIT0 					
++DATA 4	DDR_PHY_PTR4_0	0x00000C80	// tDINIT1 					
++DATA 4	DDR_PHY_PTR5_0	0x0004E200	// tDINIT2 					
++DATA 4	DDR_PHY_PTR6_0	0x03300640	// tDINIT4, tDINIT3 					
++// Set-up ODT Configuration Register								
++// DDR ODT_CA signal is tied at boundary of DDR. Thus no need to drive it dynamically.								
++DATA 4	DDR_PHY_RANKIDR_0	0x00000001	// Select rank 1 to write					
++DATA 4	DDR_PHY_ODTCR_0	0x00000000	// ODT of rank1 disabled					
++DATA 4	DDR_PHY_RANKIDR_0	0x00000000	// Select rank 0 to write					
++DATA 4	DDR_PHY_ODTCR_0	0x00000000	// ODT of rank0 disabled					
++// Set-up AC I/O Configuration Register								
++// ACIOCR1-4 are untouched								
++DATA 4	DDR_PHY_ACIOCR0_0	0x30070800	// PNUM2 (i.e.LPDDR4) selection  [10:11] = 0x2					
++DATA 4	DDR_PHY_ACIOCR5_0	0x09000000	// I/O mode = LPDDR4					
++// Due to address copy set A[13] (=cke_B[0]) and A[15] (=cke_B[1]) outputs as always ON.								
++DATA 4	DDR_PHY_ACIOCR1_0	0x44000000						
++// Set-up VREF Training Control Registers								
++DATA 4	DDR_PHY_VTCR0_0	0xF0032008	// CK1, CK0, DRAM VREF set to same as MR12					
++DATA 4	DDR_PHY_VTCR1_0	0x07F001AF	// HVIO=1, SHREN=1, SHRNK=0					
++// Set-up DATX8 General Configuration Registers								
++// DXnGCR0-4 are untouched								
++SET_BIT 4	DDR_PHY_PGCR5_0	0x4						
++DATA 4	DDR_PHY_PGCR6_0	0x00033200	// Enable CSN Bit Delay VT Compensation (AC already enabled by default) + drift limit					
++// Set-up DATX8 General Configuration Registers								
++DATA 4	DDR_PHY_DX0GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX0GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++// Set-up DATX8 DX Control Register 2								
++// PREOEX=2.5tCK (0.5 more than MR1), POSOEX=1tCK (0.5 more than in MR3), LPWAKEUP_THRSH								
++DATA 4	DDR_PHY_DX8SLbDXCTL2_0	0x001C1600						
++DATA 4	DDR_PHY_PGCR4_0	0x001900B1						
++// Set-up DATX8 IO Control Register								
++DATA 4	DDR_PHY_DX8SLbIOCR_0	0x79000000	// I/O mode = LPDDR4					
++//-------------------------------------------								
++// Configure registers for DRAM initialization								
++//-------------------------------------------								
++// Set-up Mode Register								
++// MR0, MR3, MR4, MR5 MR6 are untouched								
++DATA 4	DDR_PHY_MR1_1	0x54	// Set BL, WR-PRE, nWR, RPST					
++DATA 4	DDR_PHY_MR2_1	0x2D	// Set RL/WL					
++DATA 4	DDR_PHY_MR3_1	0xF1	// Set drive strength 					
++								
++DATA 4	DDR_PHY_MR11_1	0x54	// Set CA ODT and DQ ODT					
++DATA 4	DDR_PHY_MR22_1	0x15	// Set ODTE-CS=1 (overrides ODT_CA for CS1 as CS not shared between ranks)					
++/* LPDDR4 mode register writes for CA and DQ VREF settings */								
++DATA 4	DDR_PHY_MR12_1	0x48						
++DATA 4	DDR_PHY_MR14_1	0x48						
++// Set-up DRAM Timing Parameters Register								
++// DTPR6 is untouched								
++DATA 4	DDR_PHY_DTPR0_1	0x1044220C	// tRRD, tRAS, tRP, tRTP					
++DATA 4	DDR_PHY_DTPR1_1	0x28400417	// tWLMRD, tFAW, tODTUP, tMRD					
++DATA 4	DDR_PHY_DTPR2_1	0x006CA1CC	// tRTW, tRTODT, tCMDCKE, tCKE, tVRCG, tXS					
++DATA 4	DDR_PHY_DTPR3_1	0x01800602	// tODX, tCCD, tDLLK, tDQSCKmax, tDQSCK 					
++DATA 4	DDR_PHY_DTPR4_1	0x01C02B0F	// tRFC, tWLO, tXP					
++DATA 4	DDR_PHY_DTPR5_1	0x21651D11	// tRC, tRCD, tWTR					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR2_1	0x000A3DEF						
++DATA 4	DDR_PHY_PTR3_1	0x0030D400	// tDINIT0 					
++DATA 4	DDR_PHY_PTR4_1	0x00000C80	// tDINIT1 					
++DATA 4	DDR_PHY_PTR5_1	0x0004E200	// tDINIT2 					
++DATA 4	DDR_PHY_PTR6_1	0x03300640	// tDINIT4, tDINIT3 (1us)					
++// Set-up ODT Configuration Register								
++// DDR ODT_CA signal is tied at boundary of DDR. Thus no need to drive it dynamically.								
++DATA 4	DDR_PHY_RANKIDR_1	0x00000001	// Select rank 1 to write					
++DATA 4	DDR_PHY_ODTCR_1	0x00000000	// ODT of rank1 disabled					
++DATA 4	DDR_PHY_RANKIDR_1	0x00000000	// Select rank 0 to write					
++DATA 4	DDR_PHY_ODTCR_1	0x00000000	// ODT of rank0 disabled					
++// Set-up AC I/O Configuration Register								
++// ACIOCR1-4 are untouched								
++DATA 4	DDR_PHY_ACIOCR0_1	0x30070800	// PNUM2 (i.e.LPDDR4) selection  [10:11] = 0x2					
++DATA 4	DDR_PHY_ACIOCR5_1	0x09000000	// I/O mode = LPDDR4					
++// Due to address copy set A[13] (=cke_B[0]) and A[15] (=cke_B[1]) outputs as always ON.								
++DATA 4	DDR_PHY_ACIOCR1_1	0x44000000						
++// Set-up VREF Training Control Registers								
++DATA 4	DDR_PHY_VTCR0_1	0xF0032008	// CK1, CK0, DRAM VREF set to same as MR12					
++DATA 4	DDR_PHY_VTCR1_1	0x07F001AF	// HVIO=1, SHREN=1, SHRNK=0					
++// Set-up DATX8 General Configuration Registers								
++// DXnGCR0-4 are untouched								
++SET_BIT 4	DDR_PHY_PGCR5_1	0x4						
++DATA 4	DDR_PHY_PGCR6_1	0x00033200	// Enable CSN Bit Delay VT Compensation (AC already enabled by default) + drift limit					
++// Set-up DATX8 General Configuration Registers								
++DATA 4	DDR_PHY_DX0GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX0GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++// Set-up DATX8 DX Control Register 2								
++// PREOEX=2.5tCK (0.5 more than MR1), POSOEX=1tCK (0.5 more than in MR3), LPWAKEUP_THRSH								
++DATA 4	DDR_PHY_DX8SLbDXCTL2_1	0x001C1600						
++DATA 4	DDR_PHY_PGCR4_1	0x001900B1						
++// Set-up DATX8 IO Control Register								
++DATA 4	DDR_PHY_DX8SLbIOCR_1	0x79000000	// I/O mode = LPDDR4					
++								
++// Wait PHY initialization end then launch DRAM initialization								
++// Wait for bit 0 of PGSR0 to be '1'								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1						
++// Wait for bit 0 of PGSR0 to be '1'								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1						
++								
++// Launch DRAM 0 initialization (set bit 0)								
++DATA 4 	DDR_PHY_PIR_0	0x180						
++DATA 4 	DDR_PHY_PIR_0	0x181						
++// Launch DRAM 1 initialization (set bit 0)								
++DATA 4	DDR_PHY_PIR_1	0x180						
++DATA 4	DDR_PHY_PIR_1	0x181						
++								
++// DRAM 0 initialization end								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1						
++// DRAM 1 initialization end								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1						
++								
++// Launch a second time DRAM initialization due to following Synopsys PHY bug:								
++// Title: "PUB does not program LPDDR4 DRAM MR22 prior to running DRAM ZQ calibration"								
++// Workaround: "Run DRAM Initialization twice"								
++DATA 4 	DDR_PHY_PIR_0	0x100						
++DATA 4 	DDR_PHY_PIR_0	0x101						
++DATA 4	DDR_PHY_PIR_1	0x100						
++DATA 4	DDR_PHY_PIR_1	0x101						
++								
++// Wait (second time) DRAM 0 initialization end								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1						
++// Wait (second time) DRAM 1 initialization end								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++								
++//---------------------------------------------------------------//								
++// DATA training								
++//---------------------------------------------------------------//								
++// configure PHY for data training								
++// The following register writes are recommended by SNPS prior to running training								
++CLR_BIT 4 	DDR_PHY_DQSDR0_0	0x00000001	// Disable drift					
++SET_BIT 4 	DDR_PHY_PGCR6_0	0x00000001	// Disable VT compensation					
++CHECK_BITS_SET 4 	DDR_PHY_PGSR1_0	0x40000000	// Disable VT compensation					
++SET_BIT 4 	DDR_PHY_PGCR1_0	0x00020040	// DISDIC=1; PUBMODE=1					
++// Per SNPS initialize BIST registers for VREF training								
++DATA 4 	DDR_PHY_BISTAR1_0	0x00010100	//BMRANK=1 (maximum rank minus 1); BIST Address Increment: 0x10 (16)					
++DATA 4 	DDR_PHY_BISTAR2_0	0x700003FF	// BMBANK=8; BMCOL=0x400 (limit to min cols in JEDEC)					
++DATA 4 	DDR_PHY_BISTAR4_0	0x00003FFF	// BMROW=0x4000 (limit to min rows in JEDEC)					
++								
++CLR_BIT 4 	DDR_PHY_DQSDR0_1	0x00000001	// Disable drift					
++SET_BIT 4 	DDR_PHY_PGCR6_1	0x00000001	// Disable VT compensation					
++CHECK_BITS_SET 4 	DDR_PHY_PGSR1_1	0x40000000	// Disable VT compensation					
++SET_BIT 4 	DDR_PHY_PGCR1_1	0x00020040	// DISDIC=1; PUBMODE=1					
++// Per SNPS initialize BIST registers for VREF training								
++DATA 4	DDR_PHY_BISTAR1_1	0x00010100	//BMRANK=1 (maximum rank minus 1); BIST Address Increment: 0x10 (16)					
++DATA 4	DDR_PHY_BISTAR2_1	0x700003FF	// BMBANK=8; BMCOL=0x400 (limit to min cols in JEDEC)					
++DATA 4	DDR_PHY_BISTAR4_1	0x00003FFF	// BMROW=0x4000 (limit to min rows in JEDEC)					
++								
++// Set-up Data Training Configuration Register								
++// Note that DTCR0.RFSHDT are set to 0x0 as a workaround for PHY bug (Synopsys								
++// case 9001045655: Design limitation in LPDDR4 mode: REFRESH must be disabled during DQS2DQ training).								
++// (FYI avoiding refresh during training leads to Denali error (CUMULATIVE_REFRESH_POSTPONE_EXCEEDS_MAX_ALLOWED).								
++DATA 4 	DDR_PHY_DTCR0_0	0x000071C7	// Set DTRPTN to 0x7. RFSHDT=0					
++DATA 4 	DDR_PHY_DTCR1_0	0x00030236	// Set RANKEN					
++DATA 4	DDR_PHY_DTCR0_1	0x000071C7	// Set DTRPTN to 0x7. RFSHDT=0					
++DATA 4	DDR_PHY_DTCR1_1	0x00030236	// Set RANKEN					
++								
++// Launch Write leveling								
++DATA 4 	DDR_PHY_PIR_0	0x200						
++DATA 4 	DDR_PHY_PIR_0	0x201						
++DATA 4	DDR_PHY_PIR_1	0x200						
++DATA 4	DDR_PHY_PIR_1	0x201						
++// Wait Write leveling to complete								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0	0x00200000						
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00200000						
++								
++// Set DQS/DQSn glitch suppression resistor for training PHY0								
++DATA 4 	DDR_PHY_DX8SLbDQSCTL_0	0x012240F7						
++// Launch Read DQS training								
++DATA 4 	DDR_PHY_PIR_0	0x400						
++DATA 4 	DDR_PHY_PIR_0	0x401						
++// Set DQS/DQSn glitch suppression resistor for training PHY1								
++DATA 4	DDR_PHY_DX8SLbDQSCTL_1	0x012240F7						
++// Launch Read DQS training								
++DATA 4	DDR_PHY_PIR_1	0x400						
++DATA 4	DDR_PHY_PIR_1	0x401						
++// Wait Read DQS training to complete PHY0								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1						
++CHECK_BITS_CLR 4 	DDR_PHY_PGSR0_0	0x00400000						
++// Remove DQS/DQSn glitch suppression resistor PHY0								
++DATA 4 	DDR_PHY_DX8SLbDQSCTL_0	0x01224000						
++// Wait Read DQS training to complete PHY1								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00400000						
++// Remove DQS/DQSn glitch suppression resistor PHY1								
++DATA 4	DDR_PHY_DX8SLbDQSCTL_1	0x01224000						
++								
++// DQS2DQ training, Write leveling, Deskew and eye trainings								
++DATA 4	DDR_PHY_PIR_0	0x0010F800						
++DATA 4	DDR_PHY_PIR_0	0x0010F801						
++DATA 4	DDR_PHY_PIR_1	0x0010F800						
++DATA 4	DDR_PHY_PIR_1	0x0010F801						
++// Wait for training to complete								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0 	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0 	0x7FF40000						
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1 	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1 	0x7FF40000						
++								
++// Launch VREF training								
++DATA 4	DDR_PHY_PIR_0	0x00020000						
++DATA 4	DDR_PHY_PIR_0	0x00020001						
++DATA 4	DDR_PHY_PIR_1	0x00020000						
++DATA 4	DDR_PHY_PIR_1	0x00020001						
++// Wait for training to complete								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0	0x00080000						
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00080000						
++								
++//Re-allow uMCTL2 to send commands to DDR								
++CLR_BIT 4	DDR_PHY_PGCR1_0	0x00020040	// DISDIC=0, PUBMODE=0					
++CLR_BIT 4	DDR_PHY_PGCR1_1	0x00020040	// DISDIC=0, PUBMODE=0					
++								
++//DQS Drift Registers PHY0								
++CLR_BIT 4	DDR_PHY_DX0GCR3_0	0x08000000						
++CLR_BIT 4	DDR_PHY_DX1GCR3_0	0x08000000						
++CLR_BIT 4	DDR_PHY_DX2GCR3_0	0x08000000						
++CLR_BIT 4	DDR_PHY_DX3GCR3_0	0x08000000						
++// Enable DQS drift detection PHY0								
++DATA 4 	DDR_PHY_DQSDR0_0	0x20188005						
++DATA 4 	DDR_PHY_DQSDR1_0	0xA8AA0000						
++DATA 4 	DDR_PHY_DQSDR2_0	0x00070200						
++//DQS Drift Registers PHY1								
++CLR_BIT 4	DDR_PHY_DX0GCR3_1	0x08000000						
++CLR_BIT 4	DDR_PHY_DX1GCR3_1	0x08000000						
++CLR_BIT 4	DDR_PHY_DX2GCR3_1	0x08000000						
++CLR_BIT 4	DDR_PHY_DX3GCR3_1	0x08000000						
++// Enable DQS drift detection PHY1								
++DATA 4	DDR_PHY_DQSDR0_1	0x20188005						
++DATA 4	DDR_PHY_DQSDR1_1	0xA8AA0000						
++DATA 4	DDR_PHY_DQSDR2_1	0x00070200						
++								
++//Enable QCHAN HWidle								
++DATA 4	0x41A40504	0x400						
++DATA 4	0x41D00504	0x400						
++								
++// Enable VT compensation								
++CLR_BIT 4	DDR_PHY_PGCR6_0	0x1 						
++CLR_BIT 4	DDR_PHY_PGCR6_1	0x1 						
++								
++//Check that controller is ready to operate								
++CHECK_BITS_SET 4	DDRC_STAT_0	0x1						
++CHECK_BITS_SET 4	DDRC_STAT_1	0x1						
++							
+diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz_cbt.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz_cbt.cfg
+new file mode 100755
+index 0000000..fd7df3c
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz_cbt.cfg
+@@ -0,0 +1,598 @@
++#define __ASSEMBLY__			
++			
++#include <MX8/MX8_ddrc.h>			
++#include <MX8/MX8_ddr_phy.h>			
++			
++/*! Configure DDR retention support */			
++DEFINE	BD_DDR_RET		/* Add/remove DDR retention */
++			
++DEFINE	BD_DDR_RET_NUM_DRC   	2	/* Number for DRCs to retain */
++DEFINE	BD_DDR_RET_NUM_REGION	6	/* DDR regions to save/restore */
++/* Descriptor values for DDR regions saved/restored during retention */			
++DEFINE	BD_DDR_RET_REGION1_ADDR	0x80000000	
++DEFINE	BD_DDR_RET_REGION1_SIZE	64	
++DEFINE	BD_DDR_RET_REGION2_ADDR	0x80008040	
++DEFINE	BD_DDR_RET_REGION2_SIZE	16	
++DEFINE	BD_DDR_RET_REGION3_ADDR	0x80010000	
++DEFINE	BD_DDR_RET_REGION3_SIZE	48	
++DEFINE	BD_DDR_RET_REGION4_ADDR	0x80001000	
++DEFINE	BD_DDR_RET_REGION4_SIZE	64	
++DEFINE	BD_DDR_RET_REGION5_ADDR	0x80009040	
++DEFINE	BD_DDR_RET_REGION5_SIZE	16	
++DEFINE	BD_DDR_RET_REGION6_ADDR	0x80011000	
++DEFINE	BD_DDR_RET_REGION6_SIZE	48	
++			
++/*			
++ * Device Configuration Data (DCD) Version 17			
++ *			
++ * Each entry must have the format:			
++ * Addr-type           Address        Value			
++ *			
++ * where:			
++ * Addr-type register length (1,2 or 4 bytes)			
++ * Address   absolute address of the register			
++ * value   value to be stored in the register			
++ */			
++			
++#ifndef SCFW_DCD			
++/* For 1600MHz DDR, DRC 800MHz operation */			
++DATA 4	0xff148000	0x00000885	/* DRC0 bringup */
++DATA 4	0xff1a0000	0x00000885	/* DRC1 bringup */
++#else			
++if (action != BOARD_DDR_COLD_INIT)			
++{			
++	return SC_ERR_NONE;		
++}			
++			
++			
++			
++			
++			
++			
++			
++			
++			
++			
++			
++			
++			
++#endif			
++			
++//-------------------------------------------			
++// Reset controller core domain (required to configure it)			
++//--------------------------------------------			
++DATA 4	0x41a40208	0x1	
++DATA 4	0x41d00208	0x1	
++DATA 4	0x41a40040	0xB	
++DATA 4	0x41d00040	0xB	
++DATA 4	0x41a40204	0x1	
++DATA 4	0x41d00204	0x1	
++			
++//-------------------------------------------			
++// Configure controller registers			
++//--------------------------------------------			
++/* DRAM 0 controller configuration begin */			
++DATA 4 	DDRC_MSTR_0   	0xC3080020	// Set LPDDR4, BL = 16 and active ranks
++DATA 4 	DDRC_DERATEEN_0   	0x00000213	// derate enable, derate values, byte to read MRR data
++DATA 4 	DDRC_DERATEINT_0   	0x0186A000	// derate MR4 interval read
++DATA 4 	DDRC_RFSHCTL0_0 	0x0021F000	
++DATA 4 	DDRC_RFSHTMG_0 	0x006100E0	// tREFI, tRFC
++DATA 4 	DDRC_INIT0_0   	0x4003061C	// pre_cke = 2ms, post_cke = 2us
++DATA 4 	DDRC_INIT1_0   	0x009E0000	// dram_rstn = 200us
++DATA 4 	DDRC_INIT3_0   	0x0054002D	// MR1, MR2
++DATA 4 	DDRC_INIT4_0   	0x00F100C0	// MR3, MR13
++DATA 4	DDRC_RANKCTL_0  	0x0000066F	// diff_rank_wr_gap, diff_rank_rd_gap, max_rank_rd 
++DATA 4	DDRC_DRAMTMG0_0 	0x1A201B22	// wr2pr, tFAW, tRASmax, tRASmin
++DATA 4	DDRC_DRAMTMG1_0 	0x00060633	// tXP, rd2pre, tRC
++DATA 4	DDRC_DRAMTMG2_0 	0x07101617	// WL, RL, rd2wr, wr2rd
++DATA 4	DDRC_DRAMTMG3_0 	0x00C0C000	// tmrw, tmrd, tmod
++DATA 4	DDRC_DRAMTMG4_0 	0x0F04080F	// trcd, tccd, trrd, trp
++DATA 4	DDRC_DRAMTMG5_0 	0x02040C0C	// tCKCKEH, tCKCKEL, tckesr, tcke
++DATA 4	DDRC_DRAMTMG6_0 	0x02020007	// tckdpde, tckdpdx, tckcsx
++DATA 4	DDRC_DRAMTMG7_0 	0x00000401	// tckpde, tckpdx
++DATA 4	DDRC_DRAMTMG12_0	0x00020610	// tCMDCKE, tCKEHCMD
++DATA 4	DDRC_DRAMTMG13_0	0x0C100002	// tODTLoff, tCCDMW, tPPD
++DATA 4	DDRC_DRAMTMG14_0	0x000000E6	// txsr
++DATA 4	DDRC_ZQCTL0_0   	0x03200018	// tZQCAL, tZQLAT
++DATA 4	DDRC_ZQCTL1_0   	0x028061A8	// tZQReset, tzq_short_interval
++DATA 4	DDRC_DFITMG0_0  	0x049E820C	// dfi_t_ctrl_delay, dfi_t_rddata_en, dfi_tphy_wrdata, dfi_tphy_wrlat
++DATA 4	DDRC_DFITMG1_0  	0x00070303	// dfi_t_wrdata_delay, dfi_t_dram_clk_disable, dfi_t_dram_clk_enable
++DATA 4	DDRC_DFITMG2_0  	0x00001C0A	// dfi_tphy_rdcslat, dfi_tphy_wrcslat
++DATA 4	DDRC_DFIMISC_0  	0x00000005	// dfi_data_cs_polarity
++DATA 4	DDRC_DFIUPD0_0  	0x00400003	// Disable the automatic dfi_ctrlupd_req generation
++DATA 4	DDRC_DFIUPD1_0  	0x008000A0	// dfi_ctrlupd_req generation interval generation (min and max)
++DATA 4	DDRC_DFIUPD2_0  	0x80000000	// dfi_phyupd_en
++DATA 4	DDRC_ADDRMAP0_0 	0x00000007	// addrmap_cs_bit0
++DATA 4	DDRC_ADDRMAP3_0 	0x00000000	// addrmap_col_b9, addrmap_col_b8, addrmap_col_b7, addrmap_col_b6
++DATA 4	DDRC_ADDRMAP4_0 	0x00001F1F	// addrmap_col_b10 and addrmap_col_b11 set to de-activated
++DATA 4	DDRC_ADDRMAP1_0 	0x00080808	// addrmap_bank_b2, addrmap_bank_b1, addrmap_bank_b0
++DATA 4	DDRC_ADDRMAP5_0 	0x08080808	// addrmap_row_b11, addrmap_row_b10_b2, addrmap_row_b1, addrmap_row_b0
++DATA 4	DDRC_ADDRMAP6_0 	0x48080808	// addrmap_row_b15, addrmap_row_b14, addrmap_row_b13, addrmap_row_b12
++DATA 4	DDRC_DBICTL_0   	0x00000007	// rd_dbi_en=wr_dbi_en=dm_en=1
++DATA 4	DDRC_ODTMAP_0   	0x00002211	// rank[3:0]_wr_odt, rank[3:0]_wr_odt
++DATA 4	DDRC_PCTRL_0_0  	0x00000001	// Enable port 0
++			
++/* DRAM 1 controller initialization */			
++DATA 4	DDRC_MSTR_1     	0xC3080020	// Set LPDDR4, BL = 16 and active ranks
++DATA 4	DDRC_DERATEEN_1 	0x00000213	// derate enable, derate values, byte to read MRR data
++DATA 4	DDRC_DERATEINT_1	0x0186A000	// derate MR4 interval read
++DATA 4	DDRC_RFSHCTL0_1 	0x0021F000	
++DATA 4	DDRC_RFSHTMG_1  	0x006100E0	// tREFI, tRFC
++DATA 4	DDRC_INIT0_1    	0x4003061C	// pre_cke = 2ms, post_cke = 2us
++DATA 4	DDRC_INIT1_1    	0x009E0000	// dram_rstn = 200us
++DATA 4	DDRC_INIT3_1    	0x0054002D	// MR1, MR2
++DATA 4	DDRC_INIT4_1    	0x00F100C0	// MR3, MR13
++DATA 4	DDRC_RANKCTL_1  	0x0000066F	// diff_rank_wr_gap, diff_rank_rd_gap, max_rank_rd 
++DATA 4	DDRC_DRAMTMG0_1 	0x1A201B22	// wr2pr, tFAW, tRASmax, tRASmin
++DATA 4	DDRC_DRAMTMG1_1 	0x00060633	// tXP, rd2pre, tRC
++DATA 4	DDRC_DRAMTMG2_1 	0x07101617	// WL, RL, rd2wr, wr2rd
++DATA 4	DDRC_DRAMTMG3_1 	0x00C0C000	// tmrw, tmrd, tmod
++DATA 4	DDRC_DRAMTMG4_1 	0x0F04080F	// trcd, tccd, trrd, trp
++DATA 4	DDRC_DRAMTMG5_1 	0x02040C0C	// tCKCKEH, tCKCKEL, tckesr, tcke
++DATA 4	DDRC_DRAMTMG6_1 	0x02020007	// tckdpde, tckdpdx, tckcsx
++DATA 4	DDRC_DRAMTMG7_1 	0x00000401	// tckpde, tckpdx
++DATA 4	DDRC_DRAMTMG12_1	0x00020610	// tCMDCKE, tCKEHCMD
++DATA 4	DDRC_DRAMTMG13_1	0x0C100002	// tODTLoff, tCCDMW, tPPD
++DATA 4	DDRC_DRAMTMG14_1	0x000000E6	// txsr
++DATA 4	DDRC_ZQCTL0_1   	0x03200018	// tZQCAL, tZQLAT
++DATA 4	DDRC_ZQCTL1_1   	0x028061A8	// tZQReset, tzq_short_interval
++DATA 4	DDRC_DFITMG0_1  	0x049E820C	// dfi_t_ctrl_delay, dfi_t_rddata_en, dfi_tphy_wrdata, dfi_tphy_wrlat
++DATA 4	DDRC_DFITMG1_1  	0x00070303	// dfi_t_wrdata_delay, dfi_t_dram_clk_disable, dfi_t_dram_clk_enable
++DATA 4	DDRC_DFITMG2_1  	0x00001C0A	// dfi_tphy_rdcslat, dfi_tphy_wrcslat
++DATA 4	DDRC_DFIMISC_1  	0x00000005	// dfi_data_cs_polarity
++DATA 4	DDRC_DFIUPD0_1  	0x00400003	// Disable the automatic dfi_ctrlupd_req generation
++DATA 4	DDRC_DFIUPD1_1  	0x008000A0	// dfi_ctrlupd_req generation interval generation (min and max)
++DATA 4	DDRC_DFIUPD2_1  	0x80000000	// dfi_phyupd_en
++DATA 4	DDRC_ADDRMAP0_1 	0x00000007	// addrmap_cs_bit0
++DATA 4	DDRC_ADDRMAP3_1 	0x00000000	// addrmap_col_b9, addrmap_col_b8, addrmap_col_b7, addrmap_col_b6
++DATA 4	DDRC_ADDRMAP4_1 	0x00001F1F	// addrmap_col_b10 and addrmap_col_b11 set to de-activated
++DATA 4	DDRC_ADDRMAP1_1 	0x00080808	// addrmap_bank_b2, addrmap_bank_b1, addrmap_bank_b0
++DATA 4	DDRC_ADDRMAP5_1 	0x08080808	// addrmap_row_b11, addrmap_row_b10_b2, addrmap_row_b1, addrmap_row_b0
++DATA 4	DDRC_ADDRMAP6_1 	0x48080808	// addrmap_row_b15, addrmap_row_b14, addrmap_row_b13, addrmap_row_b12
++DATA 4	DDRC_DBICTL_1   	0x00000007	// rd_dbi_en=wr_dbi_en=dm_en=1
++DATA 4	DDRC_ODTMAP_1   	0x00002211	// rank[3:0]_wr_odt, rank[3:0]_wr_odt
++DATA 4	DDRC_PCTRL_0_1  	0x00000001	// Enable port 0
++			
++//Performance optimizations			
++DATA 4	DDRC_PWRCTL_0 	0x0000010A	
++DATA 4	DDRC_PWRCTL_1 	0x0000010A	
++DATA 4	DDRC_PWRTMG_0 	0x00402010	
++DATA 4	DDRC_PWRTMG_1 	0x00402010	
++DATA 4	DDRC_HWLPCTL_0	0x06FF0001	
++DATA 4	DDRC_HWLPCTL_1	0x06FF0001	
++			
++//Enables DFI Low Power interface			
++DATA 4	DDRC_DFILPCFG0_0	0x0700B100	
++DATA 4	DDRC_DFILPCFG0_1	0x0700B100	
++			
++//-------------------------------------------			
++// Release reset of controller core domain			
++//--------------------------------------------			
++DATA 4	0x41a40208	0x1	
++DATA 4	0x41d00208	0x1	
++DATA 4 	0x41a40040	0xF	
++DATA 4	0x41d00040	0xF	
++DATA 4 	0x41a40204	0x1	
++DATA 4	0x41d00204	0x1	
++			
++//-------------------------------------------			
++// Configure PHY registers for PHY initialization			
++//--------------------------------------------			
++/* DRAM 0 controller configuration begin */			
++// Set-up DRAM Configuration Register			
++DATA 4	DDR_PHY_DCR_0	0x0000040D	// LPDDR4 selection with 8 bank
++// Set-up byte and bit swapping registers			
++DATA 4	DDR_PHY_PGCR8_0    	0x000F0009	
++DATA 4	DDR_PHY_DX0DQMAP0_0	0x00003465	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX0DQMAP1_0	0x00008271	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_DX1DQMAP0_0	0x00075632	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX1DQMAP1_0	0x00008104	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_DX2DQMAP0_0	0x00064732	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX2DQMAP1_0	0x00008015	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_DX3DQMAP0_0	0x00012574	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX3DQMAP1_0	0x00008360	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_CATR0_0    	0x00141032	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY
++DATA 4	DDR_PHY_CATR1_0    	0x0013AAAA	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY
++// Set-up PHY General Configuration Register			
++SET_BIT 4 	DDR_PHY_PGCR1_0	0x000A0040	// DISDIC=1 (no uMCTL2 commands can go to memory), WDQSEXT=1, PUBMODE=1
++DATA 4	DDR_PHY_PGCR0_0	0x87001E00	// Set ADCP=1 (Address Copy)
++DATA 4	DDR_PHY_PGCR2_0	0x00F0D879	// Set tREFPRD 
++DATA 4	DDR_PHY_PGCR3_0	0x050A1080	// CKEN/CKNEN toggling and polarity
++// Set-up PHY Timing Register			
++DATA 4	DDR_PHY_PTR0_0	0x64032010	// tPLLPD, tPLLGS, tPHYRST
++DATA 4	DDR_PHY_PTR1_0	0x4E201C20	// tPLLLOCK, tPLLRST
++// Set-up PLL Control Register			
++DATA 4	DDR_PHY_PLLCR0_0      	0x801C0000	
++DATA 4	DDR_PHY_DX8SLbPLLCR0_0	0x801C0000	
++// Set-up Impedance Control Register			
++DATA 4	DDR_PHY_ZQCR_0	0x008C2C58	// Set ODT_MODE=0b10(LPDDR4 stype pullup)
++// ZPROG_DRAM_ODT and ZPROG_HOST_ODT 			
++DATA 4 	DDR_PHY_ZQ0PR0_0	0x0001B9BB	// Impedance control for CA bus
++DATA 4 	DDR_PHY_ZQ1PR0_0	0x0001B9BB	// Impedance control for DQ bus
++// Set-up PHY Initialization Register			
++			
++/* DRAM 1 controller configuration begin */			
++// Set-up DRAM Configuration Register			
++DATA 4	DDR_PHY_DCR_1	0x0000040D	// LPDDR4 selection with 8 bank
++// Set-up byte and bit swapping registers			
++DATA 4	DDR_PHY_PGCR8_1	0x000F0009	
++DATA 4	DDR_PHY_DX0DQMAP0_1	0x00003465	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX0DQMAP1_1	0x00008271	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_DX1DQMAP0_1	0x00075632	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX1DQMAP1_1	0x00008104	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_DX2DQMAP0_1	0x00064732	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX2DQMAP1_1	0x00008015	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_DX3DQMAP0_1	0x00012574	// DQ bit 0/1/2/3/4 remapping
++DATA 4	DDR_PHY_DX3DQMAP1_1	0x00008360	// DQ bit 5/6/7 and DM remapping
++DATA 4	DDR_PHY_CATR0_1	0x00141032	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY
++DATA 4	DDR_PHY_CATR1_1	0x0013AAAA	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY
++// Set-up PHY General Configuration Register			
++SET_BIT 4	DDR_PHY_PGCR1_1	0x000A0040	// DISDIC=1 (no uMCTL2 commands can go to memory), WDQSEXT=1, PUBMODE=1
++DATA 4	DDR_PHY_PGCR0_1	0x87001E00	// Set ADCP=1 (Address Copy)
++DATA 4	DDR_PHY_PGCR2_1	0x00F0D879	// Set tREFPRD 
++DATA 4	DDR_PHY_PGCR3_1	0x050A1080	// CKEN/CKNEN toggling and polarity
++// Set-up PHY Timing Register			
++DATA 4	DDR_PHY_PTR0_1	0x64032010	// tPLLPD, tPLLGS, tPHYRST
++DATA 4	DDR_PHY_PTR1_1	0x4E201C20	// tPLLLOCK, tPLLRST
++// Set-up PLL Control Register			
++DATA 4	DDR_PHY_PLLCR0_1	0x801C0000	
++DATA 4	DDR_PHY_DX8SLbPLLCR0_1	0x801C0000	
++// Set-up Impedance Control Register			
++DATA 4	DDR_PHY_ZQCR_1	0x008C2C58	// Set ODT_MODE=0b10(LPDDR4 stype pullup)
++// ZPROG_DRAM_ODT and ZPROG_HOST_ODT 			
++DATA 4	DDR_PHY_ZQ0PR0_1	0x0001B9BB	// Impedance control for CA bus
++DATA 4	DDR_PHY_ZQ1PR0_1	0x0001B9BB	// Impedance control for DQ bus
++			
++			
++//-------------------------------------------			
++// Launch PLL init			
++//--------------------------------------------			
++DATA 4 	DDR_PHY_PIR_0	0x10	
++DATA 4 	DDR_PHY_PIR_0	0x11	
++DATA 4	DDR_PHY_PIR_1	0x10	
++DATA 4	DDR_PHY_PIR_1	0x11	
++			
++// Wait end of PLL init (Wait for bit 0 of PGSR0 to be '1')			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1	
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1	
++			
++			
++//-------------------------------------------			
++// Switch to boot frequency and launch DCAL+ZCAL			
++//--------------------------------------------			
++/* DRAM 0 */			
++DATA 4 	DDR_PHY_PLLCR0_0	0xA01C0000	// Put PLL in power down state
++DATA 4	DDR_PHY_DX8SLbPLLCR0_0	0xA01C0000	
++// Switch to boot frequency			
++DATA 4	0x41a40208	0x1	// Gate functional clock to avoid glitches
++DATA 4 	0x41a40504	0x00800000	// Set bypass mode in DSC GPR control register
++DATA 4 	0x41a40204	0x1	// Ungate functional clock
++// Set PLL timings for boot frequency			
++DATA 4	DDR_PHY_PTR0_0	0x03201901	
++DATA 4	DDR_PHY_PTR1_0	0x027100E1	
++// Launch DCAL+ZCAL			
++DATA 4 	DDR_PHY_PIR_0	0x22	
++DATA 4 	DDR_PHY_PIR_0	0x23	
++			
++/* DRAM 1 */			
++DATA 4	DDR_PHY_PLLCR0_1	0xA01C0000	// Put PLL in power down state
++DATA 4	DDR_PHY_DX8SLbPLLCR0_1	0xA01C0000	
++// Switch to boot frequency			
++DATA 4	0x41d00208	0x1	
++DATA 4	0x41d00504	0x00800000	
++DATA 4	0x41d00204	0x1	
++// Set PLL timings for boot frequency			
++DATA 4	DDR_PHY_PTR0_1	0x03201901	
++DATA 4	DDR_PHY_PTR1_1	0x027100E1	
++// Launch DCAL+ZCAL			
++DATA 4	DDR_PHY_PIR_1	0x22	
++DATA 4	DDR_PHY_PIR_1	0x23	
++			
++//-------------------------------------------			
++// Configure registers for DRAM initialization			
++//-------------------------------------------			
++/* DRAM 0 */			
++// Set-up Mode Register			
++// MR0, MR3, MR4, MR5 MR6 are untouched			
++DATA 4	DDR_PHY_MR1_0	0x54	// Set BL, WR-PRE, nWR, RPST
++DATA 4	DDR_PHY_MR2_0	0x2D	// Set RL/WL
++DATA 4	DDR_PHY_MR3_0	0xF1	// Set drive strength 
++			
++DATA 4	DDR_PHY_MR11_0	0x54	// Set CA ODT and DQ ODT
++DATA 4	DDR_PHY_MR13_0	0xC0	
++DATA 4	DDR_PHY_MR22_0	0x15	// Set ODTE-CS=1 (overrides ODT_CA for CS1 as CS not shared between ranks)
++/* LPDDR4 mode register writes for CA and DQ VREF settings */			
++DATA 4	DDR_PHY_MR12_0	0x48	
++DATA 4	DDR_PHY_MR14_0	0x48	
++// Set-up DRAM Timing Parameters Register			
++// DTPR6 is untouched			
++DATA 4	DDR_PHY_DTPR0_0	0x1044220C	// tRRD, tRAS, tRP, tRTP
++DATA 4	DDR_PHY_DTPR1_0	0x28400417	// tWLMRD, tFAW, tODTUP, tMRD
++DATA 4	DDR_PHY_DTPR2_0	0x006CA1CC	// tRTW, tRTODT, tCMDCKE, tCKE, tVRCG, tXS
++DATA 4	DDR_PHY_DTPR3_0	0x01800602	// tODX, tCCD, tDLLK, tDQSCKmax, tDQSCK 
++DATA 4	DDR_PHY_DTPR4_0	0x01C02B0F	// tRFC, tWLO, tXP
++DATA 4	DDR_PHY_DTPR5_0	0x21651D11	// tRC, tRCD, tWTR
++// Set-up PHY Timing Register			
++DATA 4	DDR_PHY_PTR2_0	0x000A3DEF	// tWLDLYS
++DATA 4	DDR_PHY_PTR3_0	0x000186A0	// tDINIT0 
++DATA 4	DDR_PHY_PTR4_0	0x00000064	// tDINIT1 
++DATA 4	DDR_PHY_PTR5_0	0x00002710	// tDINIT2 
++DATA 4	DDR_PHY_PTR6_0	0x00B00032	// tDINIT4, tDINIT3 
++// Set-up ODT Configuration Register			
++// DDR ODT_CA signal is tied at boundary of DDR. Thus no need to drive it dynamically.			
++DATA 4	DDR_PHY_RANKIDR_0	0x00000001	// Select rank 1 to write
++DATA 4	DDR_PHY_ODTCR_0	0x00000000	// ODT of rank1 disabled
++DATA 4	DDR_PHY_RANKIDR_0	0x00000000	// Select rank 0 to write
++DATA 4	DDR_PHY_ODTCR_0	0x00000000	// ODT of rank0 disabled
++// Set-up AC I/O Configuration Register			
++// ACIOCR1-4 are untouched			
++DATA 4	DDR_PHY_ACIOCR0_0	0x30070801	// PNUM2 (i.e.LPDDR4) selection  [10:11] = 0x2
++DATA 4	DDR_PHY_ACIOCR5_0	0x09000000	// I/O mode = LPDDR4
++// Due to address copy set A[13] (=cke_B[0]) and A[15] (=cke_B[1]) outputs as always ON.			
++DATA 4	DDR_PHY_ACIOCR1_0	0x44000000	
++// Set-up VREF Training Control Registers			
++DATA 4	DDR_PHY_VTCR0_0	0xF0032008	// CK1, CK0, DRAM VREF set to same as MR12
++DATA 4	DDR_PHY_VTCR1_0	0x07F001AF	// HVIO=1, SHREN=1, SHRNK=0
++// Set-up DATX8 General Configuration Registers			
++// DXnGCR0-4 are untouched			
++SET_BIT 4	DDR_PHY_PGCR5_0	0x4	
++DATA 4	DDR_PHY_PGCR6_0	0x00033200	// Enable CSN Bit Delay VT Compensation (AC already enabled by default) + drift limit
++// Set-up DATX8 General Configuration Registers			
++DATA 4	DDR_PHY_DX0GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX1GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX2GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX3GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX0GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++DATA 4	DDR_PHY_DX1GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++DATA 4	DDR_PHY_DX2GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++DATA 4	DDR_PHY_DX3GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++// Set-up DATX8 DX Control Register 2			
++// PREOEX=2.5tCK (0.5 more than MR1), POSOEX=1tCK (0.5 more than in MR3), LPWAKEUP_THRSH			
++DATA 4	DDR_PHY_DX8SLbDXCTL2_0	0x001C1600	
++DATA 4	DDR_PHY_PGCR4_0	0x001900B1	
++// Set-up DATX8 IO Control Register			
++DATA 4	DDR_PHY_DX8SLbIOCR_0	0x79000000	// I/O mode = LPDDR4
++			
++/* DRAM 1 */			
++// Set-up Mode Register			
++// MR0, MR3, MR4, MR5 MR6 are untouched			
++DATA 4	DDR_PHY_MR1_1	0x54	// Set BL, WR-PRE, nWR, RPST
++DATA 4	DDR_PHY_MR2_1	0x2D	// Set RL/WL
++DATA 4	DDR_PHY_MR3_1	0xF1	// Set drive strength 
++			
++DATA 4	DDR_PHY_MR11_1	0x54	// Set CA ODT and DQ ODT
++DATA 4	DDR_PHY_MR13_1	0xC0	
++DATA 4	DDR_PHY_MR22_1	0x15	// Set ODTE-CS=1 (overrides ODT_CA for CS1 as CS not shared between ranks)
++/* LPDDR4 mode register writes for CA and DQ VREF settings */			
++DATA 4	DDR_PHY_MR12_1	0x48	
++DATA 4	DDR_PHY_MR14_1	0x48	
++// Set-up DRAM Timing Parameters Register			
++// DTPR6 is untouched			
++DATA 4	DDR_PHY_DTPR0_1	0x1044220C	// tRRD, tRAS, tRP, tRTP
++DATA 4	DDR_PHY_DTPR1_1	0x28400417	// tWLMRD, tFAW, tODTUP, tMRD
++DATA 4	DDR_PHY_DTPR2_1	0x006CA1CC	// tRTW, tRTODT, tCMDCKE, tCKE, tVRCG, tXS
++DATA 4	DDR_PHY_DTPR3_1	0x01800602	// tODX, tCCD, tDLLK, tDQSCKmax, tDQSCK 
++DATA 4	DDR_PHY_DTPR4_1	0x01C02B0F	// tRFC, tWLO, tXP
++DATA 4	DDR_PHY_DTPR5_1	0x21651D11	// tRC, tRCD, tWTR
++// Set-up PHY Timing Register			
++DATA 4	DDR_PHY_PTR2_1	0x000A3DEF	
++DATA 4	DDR_PHY_PTR3_1	0x000186A0	// tDINIT0 
++DATA 4	DDR_PHY_PTR4_1	0x00000064	// tDINIT1 
++DATA 4	DDR_PHY_PTR5_1	0x00002710	// tDINIT2 
++DATA 4	DDR_PHY_PTR6_1	0x00B00032	// tDINIT4, tDINIT3 (1us)
++// Set-up ODT Configuration Register			
++// DDR ODT_CA signal is tied at boundary of DDR. Thus no need to drive it dynamically.			
++DATA 4	DDR_PHY_RANKIDR_1	0x00000001	// Select rank 1 to write
++DATA 4	DDR_PHY_ODTCR_1	0x00000000	// ODT of rank1 disabled
++DATA 4	DDR_PHY_RANKIDR_1	0x00000000	// Select rank 0 to write
++DATA 4	DDR_PHY_ODTCR_1	0x00000000	// ODT of rank0 disabled
++// Set-up AC I/O Configuration Register			
++// ACIOCR1-4 are untouched			
++DATA 4	DDR_PHY_ACIOCR0_1	0x30070801	// PNUM2 (i.e.LPDDR4) selection  [10:11] = 0x2
++DATA 4	DDR_PHY_ACIOCR5_1	0x09000000	// I/O mode = LPDDR4
++// Due to address copy set A[13] (=cke_B[0]) and A[15] (=cke_B[1]) outputs as always ON.			
++DATA 4	DDR_PHY_ACIOCR1_1	0x44000000	
++// Set-up VREF Training Control Registers			
++DATA 4	DDR_PHY_VTCR0_1	0xF0032008	// CK1, CK0, DRAM VREF set to same as MR12
++DATA 4	DDR_PHY_VTCR1_1	0x07F001AF	// HVIO=1, SHREN=1, SHRNK=0
++// Set-up DATX8 General Configuration Registers			
++// DXnGCR0-4 are untouched			
++SET_BIT 4	DDR_PHY_PGCR5_1	0x4	
++DATA 4	DDR_PHY_PGCR6_1	0x00033200	// Enable CSN Bit Delay VT Compensation (AC already enabled by default) + drift limit
++// Set-up DATX8 General Configuration Registers			
++DATA 4	DDR_PHY_DX0GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX1GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX2GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX3GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults
++DATA 4	DDR_PHY_DX0GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++DATA 4	DDR_PHY_DX1GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++DATA 4	DDR_PHY_DX2GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++DATA 4	DDR_PHY_DX3GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults
++// Set-up DATX8 DX Control Register 2			
++// PREOEX=2.5tCK (0.5 more than MR1), POSOEX=1tCK (0.5 more than in MR3), LPWAKEUP_THRSH			
++DATA 4	DDR_PHY_DX8SLbDXCTL2_1	0x001C1600	
++DATA 4	DDR_PHY_PGCR4_1	0x001900B1	
++// Set-up DATX8 IO Control Register			
++DATA 4	DDR_PHY_DX8SLbIOCR_1	0x79000000	// I/O mode = LPDDR4
++			
++//-------------------------------------------			
++// Wait end of PHY initialization then launch DRAM initialization			
++//-------------------------------------------			
++/* DRAM 0 */			
++// Wait for bit 0 of PGSR0 to be '1'			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1	
++// Launch DRAM initialization (set bit 0)			
++DATA 4 	DDR_PHY_PIR_0	0x180	
++DATA 4 	DDR_PHY_PIR_0	0x181	
++			
++/* DRAM 1 */			
++// Wait for bit 0 of PGSR0 to be '1'			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1	
++// Launch DRAM initialization (set bit 0)			
++DATA 4	DDR_PHY_PIR_1	0x180	
++DATA 4	DDR_PHY_PIR_1	0x181	
++			
++//-------------------------------------------			
++// Wait end of DRAM initialization then launch second DRAM initialization			
++// This is required due to following Synopsys PHY bug:			
++// Title: "PUB does not program LPDDR4 DRAM MR22 prior to running DRAM ZQ calibration"			
++// Workaround: "Run DRAM Initialization twice"			
++//-------------------------------------------			
++			
++/* DRAM 0 */			
++// Wait for bit 0 of PGSR0 to be '1'			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1	
++// tDINIT0 reduced to 2us instead of 2ms. No need to wait the 2ms for the second DRAM init.			
++DATA 4 	DDR_PHY_PTR3_0	0x00000064	
++// Launch DRAM initialization (set bit 0)			
++DATA 4 	DDR_PHY_PIR_0	0x100	
++DATA 4 	DDR_PHY_PIR_0	0x101	
++			
++/* DRAM 1 */			
++// Wait for bit 0 of PGSR0 to be '1'			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1	
++// tDINIT0 reduced to 2us instead of 2ms. No need to wait the 2ms for the second DRAM init.			
++DATA 4	DDR_PHY_PTR3_1	0x00000064	
++// Launch DRAM initialization (set bit 0)			
++DATA 4	DDR_PHY_PIR_1	0x100	
++DATA 4	DDR_PHY_PIR_1	0x101	
++			
++//-------------------------------------------			
++// Wait end of second DRAM initialization			
++//-------------------------------------------			
++// DRAM 0 initialization end			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1	
++// DRAM 1 initialization end			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1	
++			
++//-------------------------------------------			
++// Run CBT (Command Bus Training)			
++//-------------------------------------------			
++//Call run_cbt(initial DDR_PHY_PTR0 value, initial DDR_PHY_PTR1 value, total_num_drc) here			
++run_cbt(0x64032010, 0x4E201C20, 2);			
++			
++//---------------------------------------------------------------//			
++// DATA training			
++//---------------------------------------------------------------//			
++// configure PHY for data training			
++// The following register writes are recommended by SNPS prior to running training			
++CLR_BIT 4 	DDR_PHY_DQSDR0_0	0x00000001	// Disable drift
++SET_BIT 4 	DDR_PHY_PGCR6_0	0x00000001	// Disable VT compensation
++CHECK_BITS_SET 4 	DDR_PHY_PGSR1_0	0x40000000	// Disable VT compensation
++SET_BIT 4 	DDR_PHY_PGCR1_0	0x00020040	// DISDIC=1; PUBMODE=1
++// Per SNPS initialize BIST registers for VREF training			
++DATA 4 	DDR_PHY_BISTAR1_0	0x00010100	//BMRANK=1 (maximum rank minus 1); BIST Address Increment: 0x10 (16)
++DATA 4 	DDR_PHY_BISTAR2_0	0x700003FF	// BMBANK=8; BMCOL=0x400 (limit to min cols in JEDEC)
++DATA 4 	DDR_PHY_BISTAR4_0	0x00003FFF	// BMROW=0x4000 (limit to min rows in JEDEC)
++			
++CLR_BIT 4 	DDR_PHY_DQSDR0_1	0x00000001	// Disable drift
++SET_BIT 4 	DDR_PHY_PGCR6_1	0x00000001	// Disable VT compensation
++CHECK_BITS_SET 4 	DDR_PHY_PGSR1_1	0x40000000	// Disable VT compensation
++SET_BIT 4 	DDR_PHY_PGCR1_1	0x00020040	// DISDIC=1; PUBMODE=1
++// Per SNPS initialize BIST registers for VREF training			
++DATA 4	DDR_PHY_BISTAR1_1	0x00010100	//BMRANK=1 (maximum rank minus 1); BIST Address Increment: 0x10 (16)
++DATA 4	DDR_PHY_BISTAR2_1	0x700003FF	// BMBANK=8; BMCOL=0x400 (limit to min cols in JEDEC)
++DATA 4	DDR_PHY_BISTAR4_1	0x00003FFF	// BMROW=0x4000 (limit to min rows in JEDEC)
++			
++// Set-up Data Training Configuration Register			
++// Note that DTCR0.RFSHDT are set to 0x0 as a workaround for PHY bug (Synopsys			
++// case 9001045655: Design limitation in LPDDR4 mode: REFRESH must be disabled during DQS2DQ training).			
++// (FYI avoiding refresh during training leads to Denali error (CUMULATIVE_REFRESH_POSTPONE_EXCEEDS_MAX_ALLOWED).			
++DATA 4 	DDR_PHY_DTCR0_0	0x000071C7	// Set DTRPTN to 0x7. RFSHDT=0
++DATA 4 	DDR_PHY_DTCR1_0	0x00030236	// Set RANKEN
++DATA 4	DDR_PHY_DTCR0_1	0x000071C7	// Set DTRPTN to 0x7. RFSHDT=0
++DATA 4	DDR_PHY_DTCR1_1	0x00030236	// Set RANKEN
++			
++// Launch Write leveling			
++DATA 4 	DDR_PHY_PIR_0	0x200	
++DATA 4 	DDR_PHY_PIR_0	0x201	
++DATA 4	DDR_PHY_PIR_1	0x200	
++DATA 4	DDR_PHY_PIR_1	0x201	
++// Wait Write leveling to complete			
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0	0x00200000	
++// Set DQS/DQSn glitch suppression resistor for training PHY0			
++DATA 4 	DDR_PHY_DX8SLbDQSCTL_0	0x012240F7	
++// Launch Read DQS training			
++DATA 4 	DDR_PHY_PIR_0	0x400	
++DATA 4 	DDR_PHY_PIR_0	0x401	
++			
++// Wait Write leveling to complete			
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00200000	
++// Set DQS/DQSn glitch suppression resistor for training PHY1			
++DATA 4	DDR_PHY_DX8SLbDQSCTL_1	0x012240F7	
++// Launch Read DQS training			
++DATA 4	DDR_PHY_PIR_1	0x400	
++DATA 4	DDR_PHY_PIR_1	0x401	
++			
++// Wait Read DQS training to complete PHY0			
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1	
++CHECK_BITS_CLR 4 	DDR_PHY_PGSR0_0	0x00400000	
++// Remove DQS/DQSn glitch suppression resistor PHY0			
++DATA 4 	DDR_PHY_DX8SLbDQSCTL_0	0x01224000	
++// DQS2DQ training, Write leveling, Deskew and eye trainings			
++DATA 4	DDR_PHY_PIR_0	0x0010F800	
++DATA 4	DDR_PHY_PIR_0	0x0010F801	
++			
++// Wait Read DQS training to complete PHY1			
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00400000	
++// Remove DQS/DQSn glitch suppression resistor PHY1			
++DATA 4	DDR_PHY_DX8SLbDQSCTL_1	0x01224000	
++// DQS2DQ training, Write leveling, Deskew and eye trainings			
++DATA 4	DDR_PHY_PIR_1	0x0010F800	
++DATA 4	DDR_PHY_PIR_1	0x0010F801	
++			
++// Wait for training to complete			
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0 	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0 	0x7FF40000	
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1 	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1 	0x7FF40000	
++			
++// Launch VREF training			
++DATA 4	DDR_PHY_PIR_0	0x00020000	
++DATA 4	DDR_PHY_PIR_0	0x00020001	
++DATA 4	DDR_PHY_PIR_1	0x00020000	
++DATA 4	DDR_PHY_PIR_1	0x00020001	
++// Wait for training to complete			
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0	0x00080000	
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1	
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00080000	
++			
++//Re-allow uMCTL2 to send commands to DDR			
++CLR_BIT 4	DDR_PHY_PGCR1_0	0x00020040	// DISDIC=0, PUBMODE=0
++CLR_BIT 4	DDR_PHY_PGCR1_1	0x00020040	// DISDIC=0, PUBMODE=0
++			
++//DQS Drift Registers PHY0			
++CLR_BIT 4	DDR_PHY_DX0GCR3_0	0x08000000	
++CLR_BIT 4	DDR_PHY_DX1GCR3_0	0x08000000	
++CLR_BIT 4	DDR_PHY_DX2GCR3_0	0x08000000	
++CLR_BIT 4	DDR_PHY_DX3GCR3_0	0x08000000	
++// Enable DQS drift detection PHY0			
++DATA 4 	DDR_PHY_DQSDR0_0	0x20188005	
++DATA 4 	DDR_PHY_DQSDR1_0	0xA8AA0000	
++DATA 4 	DDR_PHY_DQSDR2_0	0x00070200	
++//DQS Drift Registers PHY1			
++CLR_BIT 4	DDR_PHY_DX0GCR3_1	0x08000000	
++CLR_BIT 4	DDR_PHY_DX1GCR3_1	0x08000000	
++CLR_BIT 4	DDR_PHY_DX2GCR3_1	0x08000000	
++CLR_BIT 4	DDR_PHY_DX3GCR3_1	0x08000000	
++// Enable DQS drift detection PHY1			
++DATA 4	DDR_PHY_DQSDR0_1	0x20188005	
++DATA 4	DDR_PHY_DQSDR1_1	0xA8AA0000	
++DATA 4	DDR_PHY_DQSDR2_1	0x00070200	
++			
++//Enable QCHAN HWidle			
++DATA 4	0x41A40504	0x400	
++DATA 4	0x41D00504	0x400	
++			
++// Enable VT compensation			
++CLR_BIT 4	DDR_PHY_PGCR6_0	0x1 	
++CLR_BIT 4	DDR_PHY_PGCR6_1	0x1 	
++			
++//Check that controller is ready to operate			
++CHECK_BITS_SET 4	DDRC_STAT_0	0x1	
++CHECK_BITS_SET 4	DDRC_STAT_1	0x1	
++			
+diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_800MHz.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_800MHz.cfg
+new file mode 100755
+index 0000000..5100485
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_800MHz.cfg
+@@ -0,0 +1,519 @@
++#define __ASSEMBLY__								
++								
++#include <MX8/MX8_ddrc.h>								
++#include <MX8/MX8_ddr_phy.h>								
++								
++/*! Configure DDR retention support */								
++DEFINE	BD_DDR_RET		/* Add/remove DDR retention */					
++								
++DEFINE	BD_DDR_RET_NUM_DRC   	2	/* Number for DRCs to retain */					
++DEFINE	BD_DDR_RET_NUM_REGION	6	/* DDR regions to save/restore */					
++/* Descriptor values for DDR regions saved/restored during retention */								
++DEFINE	BD_DDR_RET_REGION1_ADDR	0x80000000						
++DEFINE	BD_DDR_RET_REGION1_SIZE	64						
++DEFINE	BD_DDR_RET_REGION2_ADDR	0x80008040						
++DEFINE	BD_DDR_RET_REGION2_SIZE	16						
++DEFINE	BD_DDR_RET_REGION3_ADDR	0x80010000						
++DEFINE	BD_DDR_RET_REGION3_SIZE	48						
++DEFINE	BD_DDR_RET_REGION4_ADDR	0x80001000						
++DEFINE	BD_DDR_RET_REGION4_SIZE	64						
++DEFINE	BD_DDR_RET_REGION5_ADDR	0x80009040						
++DEFINE	BD_DDR_RET_REGION5_SIZE	16						
++DEFINE	BD_DDR_RET_REGION6_ADDR	0x80011000						
++DEFINE	BD_DDR_RET_REGION6_SIZE	48						
++								
++/*								
++ * Device Configuration Data (DCD) Version 17								
++ *								
++ * Each entry must have the format:								
++ * Addr-type           Address        Value								
++ *								
++ * where:								
++ * Addr-type register length (1,2 or 4 bytes)								
++ * Address   absolute address of the register								
++ * value   value to be stored in the register								
++ */								
++								
++#ifndef SCFW_DCD								
++/* For 800MHz DDR, DRC 400MHz operation */								
++DATA 4	0xff148000	0x00000C85	/* DRC0 bringup */					
++DATA 4	0xff1a0000	0x00000C85	/* DRC1 bringup */					
++#else								
++if (action != BOARD_DDR_COLD_INIT)								
++{								
++	return SC_ERR_NONE;							
++}								
++if (rom_caller == SC_FALSE)								
++{								
++	/* Set the DRC rate to 800MHz. */							
++	uint32_t rate2 = SC_400MHZ;							
++	(void) pm_set_clock_rate(SC_PT, SC_R_DRC_0, SC_PM_CLK_MISC0, &rate2);							
++	(void) pm_set_clock_rate(SC_PT, SC_R_DRC_1, SC_PM_CLK_MISC0, &rate2);							
++}								
++else								
++{								
++/* Change to div4 output */								
++DATA 4 0x41A43800 0x4C000000								
++DATA 4 0x41D03800 0x4C000000								
++}								
++#endif								
++								
++DATA 4	0x41a40208	0x1						
++DATA 4	0x41d00208	0x1						
++DATA 4	0x41a40040	0xB						
++DATA 4	0x41d00040	0xB						
++DATA 4	0x41a40204	0x1						
++DATA 4	0x41d00204	0x1						
++/* DRAM 0 controller configuration begin */								
++DATA 4 	DDRC_MSTR_0   	0xC3080020	// Set LPDDR4, BL = 16 and active ranks					
++DATA 4 	DDRC_DERATEEN_0   	0x00000111	// derate enable, derate values, byte to read MRR data					
++DATA 4 	DDRC_DERATEINT_0   	0x00C35000	// derate MR4 interval read					
++DATA 4 	DDRC_RFSHCTL0_0 	0x0021F000						
++DATA 4 	DDRC_RFSHTMG_0 	0x00300070	// tREFI, tRFC					
++DATA 4 	DDRC_INIT0_0   	0x4002030F	// pre_cke = 2ms, post_cke = 2us					
++DATA 4 	DDRC_INIT1_0   	0x00500000	// dram_rstn = 200us					
++DATA 4 	DDRC_INIT3_0   	0x00240012	// MR1, MR2					
++DATA 4 	DDRC_INIT4_0   	0x00F10000	// MR3, MR13					
++DATA 4	DDRC_RANKCTL_0  	0x0000066F	// diff_rank_wr_gap, diff_rank_rd_gap, max_rank_rd 					
++DATA 4	DDRC_DRAMTMG0_0 	0x10100D11	// wr2pr, tFAW, tRASmax, tRASmin					
++DATA 4	DDRC_DRAMTMG1_0 	0x0003041A	// tXP, rd2pre, tRC					
++DATA 4	DDRC_DRAMTMG2_0 	0x0408100F	// WL, RL, rd2wr, wr2rd					
++DATA 4	DDRC_DRAMTMG3_0 	0x00606000	// tmrw, tmrd, tmod					
++DATA 4	DDRC_DRAMTMG4_0 	0x08040408	// trcd, tccd, trrd, trp					
++DATA 4	DDRC_DRAMTMG5_0 	0x02030606	// tCKCKEH, tCKCKEL, tckesr, tcke					
++DATA 4	DDRC_DRAMTMG6_0 	0x02020004	// tckdpde, tckdpdx, tckcsx					
++DATA 4	DDRC_DRAMTMG7_0 	0x00000301	// tckpde, tckpdx					
++DATA 4	DDRC_DRAMTMG12_0	0x00020310	// tCMDCKE, tCKEHCMD					
++DATA 4	DDRC_DRAMTMG13_0	0x0B100002	// tODTLoff, tCCDMW, tPPD					
++DATA 4	DDRC_DRAMTMG14_0	0x00000073	// txsr					
++DATA 4	DDRC_ZQCTL0_0   	0x0190000C	// tZQCAL, tZQLAT					
++DATA 4	DDRC_ZQCTL1_0   	0x014030D4	// tZQReset, tzq_short_interval					
++DATA 4	DDRC_DFITMG0_0  	0x048D8206	// dfi_t_ctrl_delay, dfi_t_rddata_en, dfi_tphy_wrdata, dfi_tphy_wrlat					
++DATA 4	DDRC_DFITMG1_0  	0x00070303	// dfi_t_wrdata_delay, dfi_t_dram_clk_disable, dfi_t_dram_clk_enable					
++DATA 4	DDRC_DFITMG2_0  	0x00000B04	// dfi_tphy_rdcslat, dfi_tphy_wrcslat					
++DATA 4	DDRC_DFIMISC_0  	0x00000005	// dfi_data_cs_polarity					
++DATA 4	DDRC_DFIUPD0_0  	0x00400003	// Disable the automatic dfi_ctrlupd_req generation					
++DATA 4	DDRC_DFIUPD1_0  	0x008000A0	// dfi_ctrlupd_req generation interval generation (min and max)					
++DATA 4	DDRC_DFIUPD2_0  	0x80000000	// dfi_phyupd_en					
++DATA 4	DDRC_ADDRMAP0_0 	0x00000007	// addrmap_cs_bit0					
++DATA 4	DDRC_ADDRMAP3_0 	0x00000000	// addrmap_col_b9, addrmap_col_b8, addrmap_col_b7, addrmap_col_b6					
++DATA 4	DDRC_ADDRMAP4_0 	0x00001F1F	// addrmap_col_b10 and addrmap_col_b11 set to de-activated					
++DATA 4	DDRC_ADDRMAP1_0 	0x00080808	// addrmap_bank_b2, addrmap_bank_b1, addrmap_bank_b0					
++DATA 4	DDRC_ADDRMAP5_0 	0x08080808	// addrmap_row_b11, addrmap_row_b10_b2, addrmap_row_b1, addrmap_row_b0					
++DATA 4	DDRC_ADDRMAP6_0 	0x48080808	// addrmap_row_b15, addrmap_row_b14, addrmap_row_b13, addrmap_row_b12					
++DATA 4	DDRC_DBICTL_0   	0x00000007	// rd_dbi_en=wr_dbi_en=dm_en=1					
++DATA 4	DDRC_ODTMAP_0   	0x00002211	// rank[3:0]_wr_odt, rank[3:0]_wr_odt					
++DATA 4	DDRC_PCTRL_0_0  	0x00000001	// Enable port 0					
++DATA 4	DDRC_DFITMG0_SHADOW_0	0x00808000						
++								
++/* DRAM 1 controller initialization */								
++DATA 4	DDRC_MSTR_1     	0xC3080020	// Set LPDDR4, BL = 16 and active ranks					
++DATA 4	DDRC_DERATEEN_1 	0x00000111	// derate enable, derate values, byte to read MRR data					
++DATA 4	DDRC_DERATEINT_1	0x00C35000	// derate MR4 interval read					
++DATA 4	DDRC_RFSHCTL0_1 	0x0021F000						
++DATA 4	DDRC_RFSHTMG_1  	0x00300070	// tREFI, tRFC					
++DATA 4	DDRC_INIT0_1    	0x4002030F	// pre_cke = 2ms, post_cke = 2us					
++DATA 4	DDRC_INIT1_1    	0x00500000	// dram_rstn = 200us					
++DATA 4	DDRC_INIT3_1    	0x00240012	// MR1, MR2					
++DATA 4	DDRC_INIT4_1    	0x00F10000	// MR3, MR13					
++DATA 4	DDRC_RANKCTL_1  	0x0000066F	// diff_rank_wr_gap, diff_rank_rd_gap, max_rank_rd 					
++DATA 4	DDRC_DRAMTMG0_1 	0x10100D11	// wr2pr, tFAW, tRASmax, tRASmin					
++DATA 4	DDRC_DRAMTMG1_1 	0x0003041A	// tXP, rd2pre, tRC					
++DATA 4	DDRC_DRAMTMG2_1 	0x0408100F	// WL, RL, rd2wr, wr2rd					
++DATA 4	DDRC_DRAMTMG3_1 	0x00606000	// tmrw, tmrd, tmod					
++DATA 4	DDRC_DRAMTMG4_1 	0x08040408	// trcd, tccd, trrd, trp					
++DATA 4	DDRC_DRAMTMG5_1 	0x02030606	// tCKCKEH, tCKCKEL, tckesr, tcke					
++DATA 4	DDRC_DRAMTMG6_1 	0x02020004	// tckdpde, tckdpdx, tckcsx					
++DATA 4	DDRC_DRAMTMG7_1 	0x00000301	// tckpde, tckpdx					
++DATA 4	DDRC_DRAMTMG12_1	0x00020310	// tCMDCKE, tCKEHCMD					
++DATA 4	DDRC_DRAMTMG13_1	0x0B100002	// tODTLoff, tCCDMW, tPPD					
++DATA 4	DDRC_DRAMTMG14_1	0x00000073	// txsr					
++DATA 4	DDRC_ZQCTL0_1   	0x0190000C	// tZQCAL, tZQLAT					
++DATA 4	DDRC_ZQCTL1_1   	0x014030D4	// tZQReset, tzq_short_interval					
++DATA 4	DDRC_DFITMG0_1  	0x048D8206	// dfi_t_ctrl_delay, dfi_t_rddata_en, dfi_tphy_wrdata, dfi_tphy_wrlat					
++DATA 4	DDRC_DFITMG1_1  	0x00070303	// dfi_t_wrdata_delay, dfi_t_dram_clk_disable, dfi_t_dram_clk_enable					
++DATA 4	DDRC_DFITMG2_1  	0x00000B04	// dfi_tphy_rdcslat, dfi_tphy_wrcslat					
++DATA 4	DDRC_DFIMISC_1  	0x00000005	// dfi_data_cs_polarity					
++DATA 4	DDRC_DFIUPD0_1  	0x00400003	// Disable the automatic dfi_ctrlupd_req generation					
++DATA 4	DDRC_DFIUPD1_1  	0x008000A0	// dfi_ctrlupd_req generation interval generation (min and max)					
++DATA 4	DDRC_DFIUPD2_1  	0x80000000	// dfi_phyupd_en					
++DATA 4	DDRC_ADDRMAP0_1 	0x00000007	// addrmap_cs_bit0					
++DATA 4	DDRC_ADDRMAP3_1 	0x00000000	// addrmap_col_b9, addrmap_col_b8, addrmap_col_b7, addrmap_col_b6					
++DATA 4	DDRC_ADDRMAP4_1 	0x00001F1F	// addrmap_col_b10 and addrmap_col_b11 set to de-activated					
++DATA 4	DDRC_ADDRMAP1_1 	0x00080808	// addrmap_bank_b2, addrmap_bank_b1, addrmap_bank_b0					
++DATA 4	DDRC_ADDRMAP5_1 	0x08080808	// addrmap_row_b11, addrmap_row_b10_b2, addrmap_row_b1, addrmap_row_b0					
++DATA 4	DDRC_ADDRMAP6_1 	0x48080808	// addrmap_row_b15, addrmap_row_b14, addrmap_row_b13, addrmap_row_b12					
++DATA 4	DDRC_DBICTL_1   	0x00000007	// rd_dbi_en=wr_dbi_en=dm_en=1					
++DATA 4	DDRC_ODTMAP_1   	0x00002211	// rank[3:0]_wr_odt, rank[3:0]_wr_odt					
++DATA 4	DDRC_PCTRL_0_1  	0x00000001	// Enable port 0					
++DATA 4	DDRC_DFITMG0_SHADOW_1	0x00808000						
++								
++//Performance optimizations								
++DATA 4	DDRC_PWRCTL_0 	0x0000010A						
++DATA 4	DDRC_PWRCTL_1 	0x0000010A						
++DATA 4	DDRC_PWRTMG_0 	0x00402010						
++DATA 4	DDRC_PWRTMG_1 	0x00402010						
++DATA 4	DDRC_HWLPCTL_0	0x06FF0001						
++DATA 4	DDRC_HWLPCTL_1	0x06FF0001						
++								
++//Enables DFI Low Power interface								
++DATA 4	DDRC_DFILPCFG0_0	0x0700B100						
++DATA 4	DDRC_DFILPCFG0_1	0x0700B100						
++								
++DATA 4	0x41a40208	0x1						
++DATA 4	0x41d00208	0x1						
++DATA 4 	0x41a40040	0xF						
++DATA 4	0x41d00040	0xF						
++DATA 4 	0x41a40204	0x1						
++DATA 4	0x41d00204	0x1						
++//-------------------------------------------								
++// Configure registers for PHY initialization								
++//--------------------------------------------								
++// Set-up DRAM Configuration Register								
++DATA 4	DDR_PHY_DCR_0	0x0000040D	// LPDDR4 selection with 8 bank					
++// Set-up byte and bit swapping registers								
++DATA 4	DDR_PHY_PGCR8_0    	0x000F0009						
++DATA 4	DDR_PHY_DX0DQMAP0_0	0x00003465	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX0DQMAP1_0	0x00008271	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX1DQMAP0_0	0x00075632	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX1DQMAP1_0	0x00008104	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX2DQMAP0_0	0x00064732	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX2DQMAP1_0	0x00008015	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX3DQMAP0_0	0x00012574	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX3DQMAP1_0	0x00008360	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_CATR0_0    	0x00141032	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++DATA 4	DDR_PHY_CATR1_0    	0x0013AAAA	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++// Set-up PHY General Configuration Register								
++SET_BIT 4 	DDR_PHY_PGCR1_0	0x000A0000	// DISDIC=1 (no uMCTL2 commands can go to memory) and WDQSEXT=1					
++DATA 4	DDR_PHY_PGCR0_0	0x87001E00	// Set ADCP=1 (Address Copy)					
++DATA 4	DDR_PHY_PGCR2_0	0x00F06AAC	// Set tREFPRD 					
++DATA 4	DDR_PHY_PGCR3_0	0x050A1080	// CKEN/CKNEN toggling and polarity					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR0_0	0x32019010	// tPLLPD, tPLLGS, tPHYRST					
++DATA 4	DDR_PHY_PTR1_0	0x27100E10	// tPLLLOCK, tPLLRST					
++// Set-up PLL Control Register								
++DATA 4	DDR_PHY_PLLCR0_0      	0x011C0000						
++DATA 4	DDR_PHY_DX8SLbPLLCR0_0	0x011C0000						
++// Set-up Impedance Control Register								
++DATA 4	DDR_PHY_ZQCR_0	0x008A2C58	// Set ODT_MODE=0b10(LPDDR4 stype pullup)					
++// ZPROG_DRAM_ODT and ZPROG_HOST_ODT 								
++DATA 4 	DDR_PHY_ZQ0PR0_0	0x0001B9BB	// Impedance control for CA bus					
++DATA 4 	DDR_PHY_ZQ1PR0_0	0x0001B9BB	// Impedance control for DQ bus					
++// Set-up PHY Initialization Register								
++DATA 4 	DDR_PHY_PIR_0	0x32						
++// Launch initialization (set bit 0)								
++DATA 4	DDR_PHY_PIR_0	0x33						
++//-------------------------------------------								
++// Configure registers for PHY initialization								
++//-------------------------------=------------								
++// Set-up DRAM 1 PHY Configuration Register								
++DATA 4	DDR_PHY_DCR_1	0x0000040D	// LPDDR4 selection with 8 bank					
++// Set-up byte and bit swapping registers								
++DATA 4	DDR_PHY_PGCR8_1	0x000F0009						
++DATA 4	DDR_PHY_DX0DQMAP0_1	0x00003465	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX0DQMAP1_1	0x00008271	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX1DQMAP0_1	0x00075632	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX1DQMAP1_1	0x00008104	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX2DQMAP0_1	0x00064732	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX2DQMAP1_1	0x00008015	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_DX3DQMAP0_1	0x00012574	// DQ bit 0/1/2/3/4 remapping					
++DATA 4	DDR_PHY_DX3DQMAP1_1	0x00008360	// DQ bit 5/6/7 and DM remapping					
++DATA 4	DDR_PHY_CATR0_1	0x00141032	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++DATA 4	DDR_PHY_CATR1_1	0x0013AAAA	// Only for LPDDR3 but used here to know how LPDDR4 bytes are connected to PHY					
++// Set-up PHY General Configuration Register								
++SET_BIT 4	DDR_PHY_PGCR1_1	0x000A0000	// DISDIC=1 (no uMCTL2 commands can go to memory) and WDQSEXT=1					
++DATA 4	DDR_PHY_PGCR0_1	0x87001E00	// Set ADCP=1 (Address Copy)					
++DATA 4	DDR_PHY_PGCR2_1	0x00F06AAC	// Set tREFPRD 					
++DATA 4	DDR_PHY_PGCR3_1	0x050A1080	// CKEN/CKNEN toggling and polarity					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR0_1	0x32019010	// tPLLPD, tPLLGS, tPHYRST					
++DATA 4	DDR_PHY_PTR1_1	0x27100E10	// tPLLLOCK, tPLLRST					
++// Set-up PLL Control Register								
++DATA 4	DDR_PHY_PLLCR0_1	0x011C0000						
++DATA 4	DDR_PHY_DX8SLbPLLCR0_1	0x011C0000						
++// Set-up Impedance Control Register								
++DATA 4	DDR_PHY_ZQCR_1	0x008A2C58	// Set ODT_MODE=0b10(LPDDR4 stype pullup)					
++// ZPROG_DRAM_ODT and ZPROG_HOST_ODT 								
++DATA 4	DDR_PHY_ZQ0PR0_1	0x0001B9BB	// Impedance control for CA bus					
++DATA 4	DDR_PHY_ZQ1PR0_1	0x0001B9BB	// Impedance control for DQ bus					
++// Set-up PHY Initialization Register								
++DATA 4	DDR_PHY_PIR_1	0x32						
++// Launch initialization (set bit 0)								
++DATA 4	DDR_PHY_PIR_1	0x33						
++//-------------------------------------------								
++// Configure registers for DRAM initialization								
++//-------------------------------------------								
++// Set-up Mode Register								
++// MR0, MR3, MR4, MR5 MR6 are untouched								
++DATA 4	DDR_PHY_MR1_0	0x24	// Set BL, WR-PRE, nWR, RPST					
++DATA 4	DDR_PHY_MR2_0	0x12	// Set RL/WL					
++DATA 4	DDR_PHY_MR3_0	0xF1	// Set drive strength 					
++								
++DATA 4	DDR_PHY_MR11_0	0x54	// Set CA ODT and DQ ODT					
++DATA 4	DDR_PHY_MR22_0	0x15	// Set ODTE-CS=1 (overrides ODT_CA for CS1 as CS not shared between ranks)					
++/* LPDDR4 mode register writes for CA and DQ VREF settings */								
++DATA 4	DDR_PHY_MR12_0	0x48						
++DATA 4	DDR_PHY_MR14_0	0x48						
++// Set-up DRAM Timing Parameters Register								
++// DTPR6 is untouched								
++DATA 4	DDR_PHY_DTPR0_0	0x08221108	// tRRD, tRAS, tRP, tRTP					
++DATA 4	DDR_PHY_DTPR1_0	0x2820040C	// tWLMRD, tFAW, tODTUP, tMRD					
++DATA 4	DDR_PHY_DTPR2_0	0x006640E6	// tRTW, tRTODT, tCMDCKE, tCKE, tVRCG, tXS					
++DATA 4	DDR_PHY_DTPR3_0	0x01800301	// tODX, tCCD, tDLLK, tDQSCKmax, tDQSCK 					
++DATA 4	DDR_PHY_DTPR4_0	0x00E02B09	// tRFC, tWLO, tXP					
++DATA 4	DDR_PHY_DTPR5_0	0x11330F09	// tRC, tRCD, tWTR					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR2_0	0x000A3DEF						
++DATA 4	DDR_PHY_PTR3_0	0x00186A00	// tDINIT0 					
++DATA 4	DDR_PHY_PTR4_0	0x00000640	// tDINIT1 					
++DATA 4	DDR_PHY_PTR5_0	0x00027100	// tDINIT2 					
++DATA 4	DDR_PHY_PTR6_0	0x01B00320	// tDINIT4, tDINIT3 					
++// Set-up ODT Configuration Register								
++// DDR ODT_CA signal is tied at boundary of DDR. Thus no need to drive it dynamically.								
++DATA 4	DDR_PHY_RANKIDR_0	0x00000001	// Select rank 1 to write					
++DATA 4	DDR_PHY_ODTCR_0	0x00000000	// ODT of rank1 disabled					
++DATA 4	DDR_PHY_RANKIDR_0	0x00000000	// Select rank 0 to write					
++DATA 4	DDR_PHY_ODTCR_0	0x00000000	// ODT of rank0 disabled					
++// Set-up AC I/O Configuration Register								
++// ACIOCR1-4 are untouched								
++DATA 4	DDR_PHY_ACIOCR0_0	0x30070800	// PNUM2 (i.e.LPDDR4) selection  [10:11] = 0x2					
++DATA 4	DDR_PHY_ACIOCR5_0	0x09000000	// I/O mode = LPDDR4					
++// Due to address copy set A[13] (=cke_B[0]) and A[15] (=cke_B[1]) outputs as always ON.								
++DATA 4	DDR_PHY_ACIOCR1_0	0x44000000						
++// Set-up VREF Training Control Registers								
++DATA 4	DDR_PHY_VTCR0_0	0xF0032008	// CK1, CK0, DRAM VREF set to same as MR12					
++DATA 4	DDR_PHY_VTCR1_0	0x07F0016F	// HVIO=1, SHREN=1, SHRNK=0					
++// Set-up DATX8 General Configuration Registers								
++// DXnGCR0-4 are untouched								
++SET_BIT 4	DDR_PHY_PGCR5_0	0x4						
++DATA 4	DDR_PHY_PGCR6_0	0x00033200	// Enable CSN Bit Delay VT Compensation (AC already enabled by default) + drift limit					
++// Set-up DATX8 General Configuration Registers								
++DATA 4	DDR_PHY_DX0GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR5_0	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX0GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR4_0	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++// Set-up DATX8 DX Control Register 2								
++// PREOEX=2.5tCK (0.5 more than MR1), POSOEX=1tCK (0.5 more than in MR3), LPWAKEUP_THRSH								
++DATA 4	DDR_PHY_DX8SLbDXCTL2_0	0x001C1600						
++DATA 4	DDR_PHY_PGCR4_0	0x001900B1						
++// Set-up DATX8 IO Control Register								
++DATA 4	DDR_PHY_DX8SLbIOCR_0	0x79000000	// I/O mode = LPDDR4					
++//-------------------------------------------								
++// Configure registers for DRAM initialization								
++//-------------------------------------------								
++// Set-up Mode Register								
++// MR0, MR3, MR4, MR5 MR6 are untouched								
++DATA 4	DDR_PHY_MR1_1	0x24	// Set BL, WR-PRE, nWR, RPST					
++DATA 4	DDR_PHY_MR2_1	0x12	// Set RL/WL					
++DATA 4	DDR_PHY_MR3_1	0xF1	// Set drive strength 					
++								
++DATA 4	DDR_PHY_MR11_1	0x54	// Set CA ODT and DQ ODT					
++DATA 4	DDR_PHY_MR22_1	0x15	// Set ODTE-CS=1 (overrides ODT_CA for CS1 as CS not shared between ranks)					
++/* LPDDR4 mode register writes for CA and DQ VREF settings */								
++DATA 4	DDR_PHY_MR12_1	0x48						
++DATA 4	DDR_PHY_MR14_1	0x48						
++// Set-up DRAM Timing Parameters Register								
++// DTPR6 is untouched								
++DATA 4	DDR_PHY_DTPR0_1	0x08221108	// tRRD, tRAS, tRP, tRTP					
++DATA 4	DDR_PHY_DTPR1_1	0x2820040C	// tWLMRD, tFAW, tODTUP, tMRD					
++DATA 4	DDR_PHY_DTPR2_1	0x006640E6	// tRTW, tRTODT, tCMDCKE, tCKE, tVRCG, tXS					
++DATA 4	DDR_PHY_DTPR3_1	0x01800301	// tODX, tCCD, tDLLK, tDQSCKmax, tDQSCK 					
++DATA 4	DDR_PHY_DTPR4_1	0x00E02B09	// tRFC, tWLO, tXP					
++DATA 4	DDR_PHY_DTPR5_1	0x11330F09	// tRC, tRCD, tWTR					
++// Set-up PHY Timing Register								
++DATA 4	DDR_PHY_PTR2_1	0x000A3DEF						
++DATA 4	DDR_PHY_PTR3_1	0x00186A00	// tDINIT0 					
++DATA 4	DDR_PHY_PTR4_1	0x00000640	// tDINIT1 					
++DATA 4	DDR_PHY_PTR5_1	0x00027100	// tDINIT2 					
++DATA 4	DDR_PHY_PTR6_1	0x01B00320	// tDINIT4, tDINIT3 (1us)					
++// Set-up ODT Configuration Register								
++// DDR ODT_CA signal is tied at boundary of DDR. Thus no need to drive it dynamically.								
++DATA 4	DDR_PHY_RANKIDR_1	0x00000001	// Select rank 1 to write					
++DATA 4	DDR_PHY_ODTCR_1	0x00000000	// ODT of rank1 disabled					
++DATA 4	DDR_PHY_RANKIDR_1	0x00000000	// Select rank 0 to write					
++DATA 4	DDR_PHY_ODTCR_1	0x00000000	// ODT of rank0 disabled					
++// Set-up AC I/O Configuration Register								
++// ACIOCR1-4 are untouched								
++DATA 4	DDR_PHY_ACIOCR0_1	0x30070800	// PNUM2 (i.e.LPDDR4) selection  [10:11] = 0x2					
++DATA 4	DDR_PHY_ACIOCR5_1	0x09000000	// I/O mode = LPDDR4					
++// Due to address copy set A[13] (=cke_B[0]) and A[15] (=cke_B[1]) outputs as always ON.								
++DATA 4	DDR_PHY_ACIOCR1_1	0x44000000						
++// Set-up VREF Training Control Registers								
++DATA 4	DDR_PHY_VTCR0_1	0xF0032008	// CK1, CK0, DRAM VREF set to same as MR12					
++DATA 4	DDR_PHY_VTCR1_1	0x07F0016F	// HVIO=1, SHREN=1, SHRNK=0					
++// Set-up DATX8 General Configuration Registers								
++// DXnGCR0-4 are untouched								
++SET_BIT 4	DDR_PHY_PGCR5_1	0x4						
++DATA 4	DDR_PHY_PGCR6_1	0x00033200	// Enable CSN Bit Delay VT Compensation (AC already enabled by default) + drift limit					
++// Set-up DATX8 General Configuration Registers								
++DATA 4	DDR_PHY_DX0GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR5_1	0x09092020	// Set DXREFISELR0 and DXREFISELR1 to 0x30, maintain other defaults					
++DATA 4	DDR_PHY_DX0GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX1GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX2GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++DATA 4	DDR_PHY_DX3GCR4_1	0x0E00BF3C	// Set DXREFSSEL,DXREFSSELRANGE,DXREFSEN,DXREFIEN, maintain other defaults					
++// Set-up DATX8 DX Control Register 2								
++// PREOEX=2.5tCK (0.5 more than MR1), POSOEX=1tCK (0.5 more than in MR3), LPWAKEUP_THRSH								
++DATA 4	DDR_PHY_DX8SLbDXCTL2_1	0x001C1600						
++DATA 4	DDR_PHY_PGCR4_1	0x001900B1						
++// Set-up DATX8 IO Control Register								
++DATA 4	DDR_PHY_DX8SLbIOCR_1	0x79000000	// I/O mode = LPDDR4					
++								
++// Wait PHY initialization end then launch DRAM initialization								
++// Wait for bit 0 of PGSR0 to be '1'								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1						
++// Wait for bit 0 of PGSR0 to be '1'								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1						
++								
++// Launch DRAM 0 initialization (set bit 0)								
++DATA 4 	DDR_PHY_PIR_0	0x180						
++DATA 4 	DDR_PHY_PIR_0	0x181						
++// Launch DRAM 1 initialization (set bit 0)								
++DATA 4	DDR_PHY_PIR_1	0x180						
++DATA 4	DDR_PHY_PIR_1	0x181						
++								
++// DRAM 0 initialization end								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1						
++// DRAM 1 initialization end								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_1	0x1						
++								
++// Launch a second time DRAM initialization due to following Synopsys PHY bug:								
++// Title: "PUB does not program LPDDR4 DRAM MR22 prior to running DRAM ZQ calibration"								
++// Workaround: "Run DRAM Initialization twice"								
++DATA 4 	DDR_PHY_PIR_0	0x100						
++DATA 4 	DDR_PHY_PIR_0	0x101						
++DATA 4	DDR_PHY_PIR_1	0x100						
++DATA 4	DDR_PHY_PIR_1	0x101						
++								
++// Wait (second time) DRAM 0 initialization end								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1						
++// Wait (second time) DRAM 1 initialization end								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++								
++//---------------------------------------------------------------//								
++// DATA training								
++//---------------------------------------------------------------//								
++// configure PHY for data training								
++// The following register writes are recommended by SNPS prior to running training								
++CLR_BIT 4 	DDR_PHY_DQSDR0_0	0x00000001	// Disable drift					
++SET_BIT 4 	DDR_PHY_PGCR6_0	0x00000001	// Disable VT compensation					
++CHECK_BITS_SET 4 	DDR_PHY_PGSR1_0	0x40000000	// Disable VT compensation					
++SET_BIT 4 	DDR_PHY_PGCR1_0	0x00020040	// DISDIC=1; PUBMODE=1					
++// Per SNPS initialize BIST registers for VREF training								
++DATA 4 	DDR_PHY_BISTAR1_0	0x00010100	//BMRANK=1 (maximum rank minus 1); BIST Address Increment: 0x10 (16)					
++DATA 4 	DDR_PHY_BISTAR2_0	0x700003FF	// BMBANK=8; BMCOL=0x400 (limit to min cols in JEDEC)					
++DATA 4 	DDR_PHY_BISTAR4_0	0x00003FFF	// BMROW=0x4000 (limit to min rows in JEDEC)					
++								
++CLR_BIT 4 	DDR_PHY_DQSDR0_1	0x00000001	// Disable drift					
++SET_BIT 4 	DDR_PHY_PGCR6_1	0x00000001	// Disable VT compensation					
++CHECK_BITS_SET 4 	DDR_PHY_PGSR1_1	0x40000000	// Disable VT compensation					
++SET_BIT 4 	DDR_PHY_PGCR1_1	0x00020040	// DISDIC=1; PUBMODE=1					
++// Per SNPS initialize BIST registers for VREF training								
++DATA 4	DDR_PHY_BISTAR1_1	0x00010100	//BMRANK=1 (maximum rank minus 1); BIST Address Increment: 0x10 (16)					
++DATA 4	DDR_PHY_BISTAR2_1	0x700003FF	// BMBANK=8; BMCOL=0x400 (limit to min cols in JEDEC)					
++DATA 4	DDR_PHY_BISTAR4_1	0x00003FFF	// BMROW=0x4000 (limit to min rows in JEDEC)					
++								
++// Set-up Data Training Configuration Register								
++// Note that DTCR0.RFSHDT are set to 0x0 as a workaround for PHY bug (Synopsys								
++// case 9001045655: Design limitation in LPDDR4 mode: REFRESH must be disabled during DQS2DQ training).								
++// (FYI avoiding refresh during training leads to Denali error (CUMULATIVE_REFRESH_POSTPONE_EXCEEDS_MAX_ALLOWED).								
++DATA 4 	DDR_PHY_DTCR0_0	0x000071C7	// Set DTRPTN to 0x7. RFSHDT=0					
++DATA 4 	DDR_PHY_DTCR1_0	0x00030236	// Set RANKEN					
++DATA 4	DDR_PHY_DTCR0_1	0x000071C7	// Set DTRPTN to 0x7. RFSHDT=0					
++DATA 4	DDR_PHY_DTCR1_1	0x00030236	// Set RANKEN					
++								
++// Launch Write leveling								
++DATA 4 	DDR_PHY_PIR_0	0x200						
++DATA 4 	DDR_PHY_PIR_0	0x201						
++DATA 4	DDR_PHY_PIR_1	0x200						
++DATA 4	DDR_PHY_PIR_1	0x201						
++// Wait Write leveling to complete								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0	0x00200000						
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00200000						
++								
++// Set DQS/DQSn glitch suppression resistor for training PHY0								
++DATA 4 	DDR_PHY_DX8SLbDQSCTL_0	0x012240F7						
++// Launch Read DQS training								
++DATA 4 	DDR_PHY_PIR_0	0x400						
++DATA 4 	DDR_PHY_PIR_0	0x401						
++// Set DQS/DQSn glitch suppression resistor for training PHY1								
++DATA 4	DDR_PHY_DX8SLbDQSCTL_1	0x012240F7						
++// Launch Read DQS training								
++DATA 4	DDR_PHY_PIR_1	0x400						
++DATA 4	DDR_PHY_PIR_1	0x401						
++// Wait Read DQS training to complete PHY0								
++CHECK_BITS_SET 4 	DDR_PHY_PGSR0_0	0x1						
++CHECK_BITS_CLR 4 	DDR_PHY_PGSR0_0	0x00400000						
++// Remove DQS/DQSn glitch suppression resistor PHY0								
++DATA 4 	DDR_PHY_DX8SLbDQSCTL_0	0x01224000						
++// Wait Read DQS training to complete PHY1								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00400000						
++// Remove DQS/DQSn glitch suppression resistor PHY1								
++DATA 4	DDR_PHY_DX8SLbDQSCTL_1	0x01224000						
++								
++// DQS2DQ training, Write leveling, Deskew and eye trainings								
++DATA 4	DDR_PHY_PIR_0	0x0010F800						
++DATA 4	DDR_PHY_PIR_0	0x0010F801						
++DATA 4	DDR_PHY_PIR_1	0x0010F800						
++DATA 4	DDR_PHY_PIR_1	0x0010F801						
++// Wait for training to complete								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0 	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0 	0x7FF40000						
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1 	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1 	0x7FF40000						
++								
++// Launch VREF training								
++DATA 4	DDR_PHY_PIR_0	0x00020000						
++DATA 4	DDR_PHY_PIR_0	0x00020001						
++DATA 4	DDR_PHY_PIR_1	0x00020000						
++DATA 4	DDR_PHY_PIR_1	0x00020001						
++// Wait for training to complete								
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_0	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_0	0x00080000						
++CHECK_BITS_SET 4	DDR_PHY_PGSR0_1	0x1						
++CHECK_BITS_CLR 4	DDR_PHY_PGSR0_1	0x00080000						
++								
++//Re-allow uMCTL2 to send commands to DDR								
++CLR_BIT 4	DDR_PHY_PGCR1_0	0x00020040	// DISDIC=0, PUBMODE=0					
++CLR_BIT 4	DDR_PHY_PGCR1_1	0x00020040	// DISDIC=0, PUBMODE=0					
++								
++//DQS Drift Registers PHY0								
++CLR_BIT 4	DDR_PHY_DX0GCR3_0	0x08000000						
++CLR_BIT 4	DDR_PHY_DX1GCR3_0	0x08000000						
++CLR_BIT 4	DDR_PHY_DX2GCR3_0	0x08000000						
++CLR_BIT 4	DDR_PHY_DX3GCR3_0	0x08000000						
++// Enable DQS drift detection PHY0								
++DATA 4 	DDR_PHY_DQSDR0_0	0x20188005						
++DATA 4 	DDR_PHY_DQSDR1_0	0xA8AA0000						
++DATA 4 	DDR_PHY_DQSDR2_0	0x00070200						
++//DQS Drift Registers PHY1								
++CLR_BIT 4	DDR_PHY_DX0GCR3_1	0x08000000						
++CLR_BIT 4	DDR_PHY_DX1GCR3_1	0x08000000						
++CLR_BIT 4	DDR_PHY_DX2GCR3_1	0x08000000						
++CLR_BIT 4	DDR_PHY_DX3GCR3_1	0x08000000						
++// Enable DQS drift detection PHY1								
++DATA 4	DDR_PHY_DQSDR0_1	0x20188005						
++DATA 4	DDR_PHY_DQSDR1_1	0xA8AA0000						
++DATA 4	DDR_PHY_DQSDR2_1	0x00070200						
++								
++//Enable QCHAN HWidle								
++DATA 4	0x41A40504	0x400						
++DATA 4	0x41D00504	0x400						
++								
++// Enable VT compensation								
++CLR_BIT 4	DDR_PHY_PGCR6_0	0x1 						
++CLR_BIT 4	DDR_PHY_PGCR6_1	0x1 						
++								
++//Check that controller is ready to operate								
++CHECK_BITS_SET 4	DDRC_STAT_0	0x1						
++CHECK_BITS_SET 4	DDRC_STAT_1	0x1						
++
+diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_emul.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_emul.cfg
+new file mode 100755
+index 0000000..f8aa55b
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_emul.cfg
+@@ -0,0 +1,216 @@
++#define __ASSEMBLY__
++
++#include <MX8/MX8_ddrc.h>
++#include <MX8/MX8_ddr_phy.h>
++
++#ifdef SCFW_DCD
++if (action != BOARD_DDR_COLD_INIT)
++{
++	return SC_ERR_NONE;
++}
++#endif
++
++// Reset Should not be needed for ZEBU.
++DATA 4 0x41a40044 0x8
++DATA 4 0x41d00044 0x8
++
++// ddrc_lpddr4_init(0)
++DATA 4 0x5C000000 0xC3080020
++DATA 4 0x5C000064 0x006100E0
++DATA 4 0x5C0000D0 0x40020010
++DATA 4 0x5C0000D4 0x00100000
++DATA 4 0x5C0000DC 0x0054002D
++DATA 4 0x5C0000E0 0x00310000
++DATA 4 0x5C0000F4 0x000006CF
++DATA 4 0x5C000100 0x1A201B22
++DATA 4 0x5C000104 0x00060633
++DATA 4 0x5C000108 0x070E1014
++DATA 4 0x5C00010C 0x0170C00C
++DATA 4 0x5C000110 0x0F04080F
++DATA 4 0x5C000114 0x03040C0C
++DATA 4 0x5C000118 0x02020007
++DATA 4 0x5C00011C 0x00000401
++DATA 4 0x5C000130 0x00020610
++DATA 4 0x5C000134 0x0C100002
++DATA 4 0x5C000138 0x000000E6
++DATA 4 0x5C000180 0x03200018
++DATA 4 0x5C000184 0x02800100
++DATA 4 0x5C000190 0x049C820C
++DATA 4 0x5C000194 0x00060303
++DATA 4 0x5C0001B4 0x00001A0A
++DATA 4 0x5C0001B0 0x00000005
++DATA 4 0x5C0001A0 0x80400003
++DATA 4 0x5C0001A4 0x00010002
++DATA 4 0x5C0001A8 0x80000000
++DATA 4 0x5C000200 0x00000017
++DATA 4 0x5C000204 0x00080808
++DATA 4 0x5C000214 0x07070707
++DATA 4 0x5C000218 0x07070707
++DATA 4 0x5C000244 0x00002211
++DATA 4 0x5C000490 0x00000001
++DATA 4 0x5C002190 0x00808000
++
++// Correct CLR settings
++CLR_BIT 4 DDRC_DFIMISC_0 0x00000001
++CLR_BIT 4 DDRC_INIT0_0 0xC0000000
++//DATA 4 0x5C0001B0 0x00000004
++//DATA 4 0x5C0000D0 0x00020010
++
++// ddr_phy_lpddr4_phy_init(0)
++DATA 4 0x5C010100 0x0000040D
++DATA 4 0x5C010018 0x00F0DA09
++DATA 4 0x5C01001C 0x050A1080
++DATA 4 0x5C010040 0x64032010
++DATA 4 0x5C010044 0x0D701C20
++DATA 4 0x5C010068 0x08000000
++DATA 4 0x5C0117C4 0x08000000
++DATA 4 0x5C010680 0x001FEC58
++
++//ddr_phy_launch_init(0)
++DATA 4 0x5C010004 0x00000040
++DATA 4 0x5C010004 0x00000041
++
++//ddr_phy_lpddr4_dram_init(0)
++DATA 4 0x5C010184 0x00000054
++DATA 4 0x5C010188 0x0000002D
++DATA 4 0x5C01018C 0x00000031
++DATA 4 0x5C010110 0x1044220C
++DATA 4 0x5C010114 0x28408C17
++DATA 4 0x5C010118 0x003C01CC
++DATA 4 0x5C01011C 0x01800604
++DATA 4 0x5C010120 0x01C0000C
++DATA 4 0x5C010124 0x00651D10
++DATA 4 0x5C01004C 0x00007D00
++DATA 4 0x5C010050 0x00000C90
++DATA 4 0x5C010054 0x00007D00
++DATA 4 0x5C010058 0x03000641
++DATA 4 0x5C010500 0x30070800
++DATA 4 0x5C010514 0x09000000
++DATA 4 0x5C010528 0xF0032019
++DATA 4 0x5C01052C 0x07F00173
++DATA 4 0x5C0117EC 0x00081800
++DATA 4 0x5C0117F0 0x09000000
++DATA 4 0x5C0117DC 0x013E4091
++
++//ddr_phy_wait_init_done(0)
++CHECK_BITS_SET 4 DDR_PHY_PGSR0_0 0x1
++
++// ddr_phy_launch_init(0)
++DATA 4 0x5C010004 0x00040000
++DATA 4 0x5C010004 0x00040001
++
++// SECOND DRC SYSTEM
++
++// ddrc_lpddr4_init(1)
++DATA 4 0x5C100000 0xC3080020
++DATA 4 0x5C100064 0x006100E0
++DATA 4 0x5C1000D0 0x40020010
++DATA 4 0x5C1000D4 0x00100000
++DATA 4 0x5C1000DC 0x0054002D
++DATA 4 0x5C1000E0 0x00310000
++DATA 4 0x5C1000F4 0x000006CF
++DATA 4 0x5C100100 0x1A201B22
++DATA 4 0x5C100104 0x00060633
++DATA 4 0x5C100108 0x070E1014
++DATA 4 0x5C10010C 0x0170C00C
++DATA 4 0x5C100110 0x0F04080F
++DATA 4 0x5C100114 0x03040C0C
++DATA 4 0x5C100118 0x02020007
++DATA 4 0x5C10011C 0x00000401
++DATA 4 0x5C100130 0x00020610
++DATA 4 0x5C100134 0x0C100002
++DATA 4 0x5C100138 0x000000E6
++DATA 4 0x5C100180 0x03200018
++DATA 4 0x5C100184 0x02800100
++DATA 4 0x5C100190 0x049C820C
++DATA 4 0x5C100194 0x00060303
++DATA 4 0x5C1001B4 0x00001A0A
++DATA 4 0x5C1001B0 0x00000005
++DATA 4 0x5C1001A0 0x80400003
++DATA 4 0x5C1001A4 0x00010002
++DATA 4 0x5C1001A8 0x80000000
++DATA 4 0x5C100200 0x00000017
++DATA 4 0x5C100204 0x00080808
++DATA 4 0x5C100214 0x07070707
++DATA 4 0x5C100218 0x07070707
++DATA 4 0x5C100244 0x00002211
++DATA 4 0x5C100490 0x00000001
++DATA 4 0x5C102190 0x00808000
++
++// Correct CLR settings
++CLR_BIT 4 DDRC_DFIMISC_1 0x00000001
++CLR_BIT 4 DDRC_INIT0_1 0xC0000000
++//DATA 4 0x5C1001B0 0x00000004
++//DATA 4 0x5C1000D0 0x00020010
++
++// ddr_phy_lpddr4_phy_init(1)
++DATA 4 0x5C110100 0x0000040D
++DATA 4 0x5C110018 0x00F0DA09
++DATA 4 0x5C11001C 0x050A1080
++DATA 4 0x5C110040 0x64032010
++DATA 4 0x5C110044 0x0D701C20
++DATA 4 0x5C110068 0x08000000
++DATA 4 0x5C1117C4 0x08000000
++DATA 4 0x5C110680 0x001FEC58
++
++//ddr_phy_launch_init(1)
++DATA 4 0x5C110004 0x00000040
++DATA 4 0x5C110004 0x00000041
++
++
++//ddr_phy_lpddr4_dram_init(1)
++DATA 4 0x5C110184 0x00000054
++DATA 4 0x5C110188 0x0000002D
++DATA 4 0x5C11018C 0x00000031
++DATA 4 0x5C110110 0x1044220C
++DATA 4 0x5C110114 0x28408C17
++DATA 4 0x5C110118 0x003C01CC
++DATA 4 0x5C11011C 0x01800604
++DATA 4 0x5C110120 0x01C0000C
++DATA 4 0x5C110124 0x00651D10
++DATA 4 0x5C11004C 0x00007D00
++DATA 4 0x5C110050 0x00000C90
++DATA 4 0x5C110054 0x00007D00
++DATA 4 0x5C110058 0x03000641
++DATA 4 0x5C110500 0x30070800
++DATA 4 0x5C110514 0x09000000
++DATA 4 0x5C110528 0xF0032019
++DATA 4 0x5C11052C 0x07F00173
++DATA 4 0x5C1117EC 0x00081800
++DATA 4 0x5C1117F0 0x09000000
++DATA 4 0x5C1117DC 0x013E4091
++
++//ddr_phy_wait_init_done(1)
++CHECK_BITS_SET 4 DDR_PHY_PGSR0_1 0x1
++
++// ddr_phy_launch_init(1)
++DATA 4 0x5C110004 0x00040000
++DATA 4 0x5C110004 0x00040001
++
++// RESET
++DSC_SetReset(SC_DSC_DRC_0, BIT(RST_DDR_CRESETN), SC_TRUE);
++DSC_SetReset(SC_DSC_DRC_1, BIT(RST_DDR_CRESETN), SC_TRUE);
++//DATA 4 0x41a40044 0x4
++//DATA 4 0x41d00044 0x4
++
++// dram_init_inst(0)
++CLR_BIT 4 DDRC_SWCTL_0 0x00000001           // Set SWCTL.sw_done to 0
++SET_BIT 4 DDRC_DFIMISC_0 0x00000001         // Set DFIMISC.dfi_init_complete_en to 1 - Trigger DRAM initialization
++SET_BIT 4 DDRC_SWCTL_0 0x00000001           // Set SWCTL.sw_done to 1
++CHECK_BITS_SET 4 DDRC_SWSTAT_0 0x00000001   // Wait for SWSTAT.sw_done_ack to become 1
++CHECK_BITS_SET 4 DDRC_STAT_0 0x1
++
++// dram_init_inst(1)
++CLR_BIT 4 DDRC_SWCTL_1 0x00000001           // Set SWCTL.sw_done to 0
++SET_BIT 4 DDRC_DFIMISC_1 0x00000001         // Set DFIMISC.dfi_init_complete_en to 1 - Trigger DRAM initialization
++SET_BIT 4 DDRC_SWCTL_1 0x00000001           // Set SWCTL.sw_done to 1
++CHECK_BITS_SET 4 DDRC_SWSTAT_1 0x00000001   // Wait for SWSTAT.sw_done_ack to become 1
++CHECK_BITS_SET 4 DDRC_STAT_1 0x1
++
++//DATA 4 0x5C000320 0x00000000
++//DATA 4 0x5C0001B0 0x00000005
++//DATA 4 0x5C000320 0x00000001
++//DATA 4 0x5C100320 0x00000000
++//DATA 4 0x5C1001B0 0x00000005
++//DATA 4 0x5C100320 0x00000001
++
+diff --git a/platform/board/mx8qm_mek_eco/split.h b/platform/board/mx8qm_mek_eco/split.h
+new file mode 100644
+index 0000000..378d173
+--- /dev/null
++++ b/platform/board/mx8qm_mek_eco/split.h
+@@ -0,0 +1,277 @@
++/*
++** ###################################################################
++**
++**     Copyright 2018 NXP
++**
++**     Redistribution and use in source and binary forms, with or without modification,
++**     are permitted provided that the following conditions are met:
++**
++**     o Redistributions of source code must retain the above copyright notice, this list
++**       of conditions and the following disclaimer.
++**
++**     o Redistributions in binary form must reproduce the above copyright notice, this
++**       list of conditions and the following disclaimer in the documentation and/or
++**       other materials provided with the distribution.
++**
++**     o Neither the name of the copyright holder nor the names of its
++**       contributors may be used to endorse or promote products derived from this
++**       software without specific prior written permission.
++**
++**     THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
++**     ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++**     WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++**     DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
++**     ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++**     (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++**     LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
++**     ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++**     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
++**     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++**
++**
++** ###################################################################
++*/
++
++/*==========================================================================*/
++/*!
++ * @file
++ *
++ * Header file used to configure HW split feature of the Ecockpit concept.
++ *
++ */
++/*==========================================================================*/
++
++
++#ifndef FIRMWARE_PLATFORM_BOARD_MX8QM_MEK_ECO_SPLIT_H_
++#define FIRMWARE_PLATFORM_BOARD_MX8QM_MEK_ECO_SPLIT_H_
++
++#include "pads.h"
++
++/* resources that are going to stay in secure partitions */
++sc_rsrc_t secure_rsrcs[] = {
++    SC_R_MU_0A,
++    SC_R_MU_3A,
++    SC_R_A53,
++    SC_R_A53_0,
++    SC_R_A53_1,
++    SC_R_A53_2,
++    SC_R_A53_3,
++    SC_R_A72,
++    SC_R_A72_0,
++    SC_R_A72_1,
++    SC_R_GPT_0,
++    SC_R_GPT_1,
++};
++
++/* resources that have register access for non-secure domain */
++sc_rsrc_t shared_rsrcs[] = {
++    SC_R_GIC,
++    SC_R_GIC_SMMU,
++    SC_R_CCI,
++    SC_R_SMMU
++};
++
++sc_rsrc_t a72_secure_rsrcs[] = {
++    SC_R_MU_3A,
++    SC_R_A72,
++    SC_R_A72_0,
++    SC_R_A72_1,
++    SC_R_SYSTEM,
++    SC_R_GPT_1,
++};
++
++sc_rsrc_t a72_ns_rsrcs[] = {
++    SC_R_MU_2A,
++    /* display & gfx resources */
++    SC_R_GPU_1_PID0,
++    SC_R_GPU_1_PID1,
++    SC_R_GPU_1_PID2,
++    SC_R_GPU_1_PID3,
++    SC_R_DC_1,
++    SC_R_DC_1_BLIT0,
++    SC_R_DC_1_BLIT1,
++    SC_R_DC_1_BLIT2,
++    SC_R_DC_1_BLIT_OUT,
++    SC_R_DC_1_WARP,
++    SC_R_DC_1_VIDEO0,
++    SC_R_DC_1_VIDEO1,
++    SC_R_DC_1_FRAC0,
++    SC_R_DC_1_PLL_0,
++    SC_R_DC_1_PLL_1,
++    SC_R_LVDS_1,
++    SC_R_LVDS_1_PWM_0,
++    SC_R_LVDS_1_I2C_0,
++    //	SC_R_LVDS_1_I2C_1, this resource does not exist for QM
++    SC_R_DMA_0_CH16,
++    SC_R_DMA_0_CH17,
++    SC_R_DMA_2_CH0,
++    SC_R_DMA_2_CH1,
++    SC_R_DMA_2_CH2,
++    SC_R_DMA_2_CH3,
++    SC_R_DMA_2_CH4,
++    SC_R_DMA_2_CH5,
++    SC_R_DMA_2_CH6,
++    SC_R_DMA_2_CH7,
++    SC_R_DMA_2_CH12,
++    SC_R_DMA_2_CH13,
++    SC_R_DMA_2_CH14,
++    SC_R_DMA_2_CH15,
++    SC_R_DMA_2_CH18,
++    SC_R_DMA_2_CH19,
++    SC_R_DMA_3_CH0,
++    SC_R_DMA_3_CH1,
++    SC_R_DMA_3_CH2,
++    SC_R_DMA_3_CH3,
++    SC_R_DMA_3_CH4,
++    SC_R_DMA_3_CH5,
++    SC_R_DMA_3_CH8,
++    SC_R_DMA_3_CH9,
++    SC_R_DMA_3_CH10,
++    SC_R_I2C_1,
++    SC_R_SDHC_0,
++    SC_R_UART_2,
++    SC_R_ENET_1,
++    /* audio resources */
++    SC_R_ASRC_0,
++    SC_R_ASRC_1,
++    SC_R_ESAI_0,
++    SC_R_ESAI_1,
++    SC_R_SPDIF_0,
++    SC_R_SPDIF_1,
++    SC_R_SAI_0,
++    SC_R_SAI_1,
++    SC_R_SAI_2,
++    SC_R_SAI_3,
++    SC_R_SAI_4,
++    SC_R_SAI_5,
++    SC_R_SAI_6,
++    SC_R_SAI_7,
++    SC_R_GPT_5,
++    SC_R_GPT_6,
++    SC_R_GPT_7,
++    SC_R_GPT_8,
++    SC_R_GPT_9,
++    SC_R_GPT_10,
++    SC_R_AMIX,
++    SC_R_MQS_0,
++    SC_R_MCLK_OUT_0,
++    SC_R_MCLK_OUT_1,
++    SC_R_AUDIO_PLL_0,
++    SC_R_AUDIO_PLL_1,
++    SC_R_AUDIO_CLK_0,
++    SC_R_AUDIO_CLK_1,
++    /* video resources */
++    SC_R_VPU,
++    SC_R_VPU_PID0,
++    SC_R_VPU_PID1,
++    SC_R_VPU_PID2,
++    SC_R_VPU_PID3,
++    SC_R_VPU_PID4,
++    SC_R_VPU_PID5,
++    SC_R_VPU_PID6,
++    SC_R_VPU_PID7,
++    SC_R_VPU_DEC_0,
++    SC_R_VPU_ENC_0,
++    SC_R_VPU_ENC_1,
++    SC_R_VPU_TS_0,
++    SC_R_VPU_MU_0,
++    SC_R_VPU_MU_1,
++    SC_R_VPU_MU_2,
++    SC_R_VPU_MU_3,
++    SC_R_DSP,
++    SC_R_DSP_RAM,
++    SC_R_CSI_0,
++    SC_R_CSI_1,
++    SC_R_MIPI_1,
++    SC_R_MIPI_1_PWM_0,
++    SC_R_MIPI_1_I2C_0,
++    SC_R_MIPI_1_I2C_1,
++    SC_R_MJPEG_DEC_S0,
++    SC_R_MJPEG_DEC_S1,
++    SC_R_MJPEG_DEC_S2,
++    SC_R_MJPEG_DEC_S3,
++    SC_R_MJPEG_ENC_S0,
++    SC_R_MJPEG_ENC_S1,
++    SC_R_MJPEG_ENC_S2,
++    SC_R_MJPEG_ENC_S3,
++    SC_R_MJPEG_DEC_MP,
++    SC_R_MJPEG_ENC_MP,
++    SC_R_ISI_CH0,
++    SC_R_ISI_CH1,
++    SC_R_ISI_CH2,
++    SC_R_ISI_CH3,
++    SC_R_ISI_CH4,
++    SC_R_ISI_CH5,
++    SC_R_ISI_CH6,
++    SC_R_ISI_CH7,
++    SC_R_USB_0,
++    SC_R_USB_0_PHY,
++    SC_R_CAAM_JR3,
++    SC_R_CAAM_JR3_OUT,
++    SC_R_GPIO_0,
++    SC_R_GPIO_3,
++    SC_R_GPIO_6,
++    SC_R_GPIO_7,
++    SC_R_M4_1_INTMUX,
++};
++
++sc_pad_t a72_pads[] = {
++    SC_P_UART0_RTS_B,
++    SC_P_UART0_CTS_B,
++    SC_P_EMMC0_CLK,
++    SC_P_EMMC0_CMD,
++    SC_P_EMMC0_DATA0,
++    SC_P_EMMC0_DATA1,
++    SC_P_EMMC0_DATA2,
++    SC_P_EMMC0_DATA3,
++    SC_P_EMMC0_DATA4,
++    SC_P_EMMC0_DATA5,
++    SC_P_EMMC0_DATA6,
++    SC_P_EMMC0_DATA7,
++    SC_P_EMMC0_STROBE,
++    SC_P_EMMC0_RESET_B,
++    SC_P_ENET1_RGMII_TXC,
++    SC_P_ENET1_RGMII_TX_CTL,
++    SC_P_ENET1_RGMII_TXD0,
++    SC_P_ENET1_RGMII_TXD1,
++    SC_P_ENET1_RGMII_TXD2,
++    SC_P_ENET1_RGMII_TXD3,
++    SC_P_ENET1_RGMII_RXC,
++    SC_P_ENET1_RGMII_RX_CTL,
++    SC_P_ENET1_RGMII_RXD0,
++    SC_P_ENET1_RGMII_RXD1,
++    SC_P_ENET1_RGMII_RXD2,
++    SC_P_ENET1_RGMII_RXD3,
++    SC_P_LVDS1_GPIO00,
++    SC_P_LVDS1_GPIO01,
++    SC_P_LVDS1_I2C1_SCL,
++    SC_P_LVDS1_I2C1_SDA,
++    SC_P_MIPI_DSI1_I2C0_SCL,
++    SC_P_MIPI_DSI1_I2C0_SDA,
++    SC_P_MIPI_DSI1_GPIO0_00,
++    SC_P_MIPI_DSI1_GPIO0_01,
++    SC_P_GPT0_CLK,		/* required for I2C1 (DMA.I2C1.SCL) */
++    SC_P_GPT0_CAPTURE,  /* required for I2C1 (DMA.I2C1.SDA) */
++    SC_P_MCLK_OUT0,
++    SC_P_ADC_IN2,
++    SC_P_USB_SS3_TC0,	/* required for USB0 (CONN.USB_OTG1.PWR) */
++    SC_P_SAI1_RXC,
++    SC_P_SAI1_RXD,
++    SC_P_SAI1_RXFS,
++    SC_P_SAI1_TXD,
++    SC_P_SAI1_TXC,
++    SC_P_SAI1_TXFS,
++    SC_P_SCU_GPIO0_03,	/* required for headphone detect */
++    SC_P_ESAI0_FSR,
++    SC_P_ESAI0_FST,
++    SC_P_ESAI0_SCKR,
++    SC_P_ESAI0_SCKT,
++    SC_P_ESAI0_TX0,
++    SC_P_ESAI0_TX1,
++    SC_P_ESAI0_TX2_RX3,
++    SC_P_ESAI0_TX3_RX2,
++    SC_P_ESAI0_TX4_RX1,
++    SC_P_ESAI0_TX5_RX0,
++};
++
++#endif /* FIRMWARE_PLATFORM_BOARD_MX8QM_MEK_ECO_SPLIT_H_ */
