@@ -1,6 +1,6 @@
 IMXBOOT_TARGETS = "flash_ecockpit_b0"
-UBOOT_NAME = "u-boot-${MACHINE}.bin-a53"
-BOOT_CONFIG_MACHINE = "${BOOT_NAME}-${MACHINE}.bin"
+
+DEPENDS += " u-boot-imx-a72"
 
 do_compile () {
     if [ "${SOC_TARGET}" = "iMX8QM" ]; then
@@ -8,7 +8,7 @@ do_compile () {
         cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${SC_FIRMWARE_NAME}        ${S}/${SOC_DIR}/scfw_tcm.bin
         cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${ATF_MACHINE_NAME}        ${S}/${SOC_DIR}/bl31.bin
         cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${ATF_MACHINE_NAME}-a72    ${S}/${SOC_DIR}/bl31-a72.bin
-        cp ${DEPLOY_DIR_IMAGE}/u-boot-${MACHINE}.bin-a53                ${S}/${SOC_DIR}/u-boot.bin
+        cp ${DEPLOY_DIR_IMAGE}/u-boot-${MACHINE}.bin-sd                ${S}/${SOC_DIR}/u-boot.bin
         cp ${DEPLOY_DIR_IMAGE}/u-boot-${MACHINE}.bin-a72                ${S}/${SOC_DIR}/u-boot-a72.bin
 
         cp ${DEPLOY_DIR_IMAGE}/mx8qm-ahab-container.img ${S}/${SOC_DIR}/
