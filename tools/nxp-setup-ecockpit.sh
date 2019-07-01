@@ -74,7 +74,7 @@ echo -e "ECOCKPIT_MIRROR = \"git://bitbucket.sw.nxp.com/mss\"" >> $BUILD_DIR/con
 echo -e "ECOCKPIT_BRANCH = \"ecockpit_4.14.98_2.0.0_ga-dev\"" >> $BUILD_DIR/conf/local.conf
 echo -e "ECOCKPIT_REVISION = \"ecockpit_06_00\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "\nATF_SRC = \"\${ECOCKPIT_MIRROR}/arm-trusted-firmware-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nATF_SRC_pn-imx-atf = \"\${ECOCKPIT_MIRROR}/arm-trusted-firmware-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCBRANCH_pn-imx-atf = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-imx-atf = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 
@@ -90,7 +90,7 @@ echo -e "\nIMX_MKIMAGE_SRC = \"\${ECOCKPIT_MIRROR}/imx-mkimage-ecockpit.git;prot
 echo -e "SRCBRANCH_pn-imx-boot = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-imx-boot = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "\nKERNEL_SRC = \"\${ECOCKPIT_MIRROR}/linux-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nKERNEL_SRC_pn-linux-imx = \"\${ECOCKPIT_MIRROR}/linux-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCBRANCH_pn-linux-imx = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-linux-imx = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 
