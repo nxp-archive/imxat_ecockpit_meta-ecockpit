@@ -1,7 +1,6 @@
 IMXBOOT_TARGETS = "flash_ecockpit_b0"
 
-DEPENDS += " u-boot-imx-a72"
-RDEPENDS_${PN} += " u-boot-imx-a72"
+do_compile[depends] += "u-boot-imx-a72:do_deploy"
 
 do_compile () {
     if [ "${SOC_TARGET}" = "iMX8QM" ]; then
