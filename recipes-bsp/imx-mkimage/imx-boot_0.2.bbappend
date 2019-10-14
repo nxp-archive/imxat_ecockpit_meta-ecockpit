@@ -1,4 +1,4 @@
-IMXBOOT_TARGETS = "flash_ecockpit_b0"
+IMXBOOT_TARGETS = "flash_ecockpit_b0_m4"
 
 do_compile[depends] += "u-boot-imx-a72:do_deploy"
 
@@ -10,6 +10,12 @@ do_compile () {
         cp ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${ATF_MACHINE_NAME}-a72    ${S}/${SOC_DIR}/bl31-a72.bin
         cp ${DEPLOY_DIR_IMAGE}/u-boot-${MACHINE}.bin-sd                ${S}/${SOC_DIR}/u-boot.bin
         cp ${DEPLOY_DIR_IMAGE}/u-boot-${MACHINE}.bin-a72                ${S}/${SOC_DIR}/u-boot-a72.bin
+
+        cp ${DEPLOY_DIR_IMAGE}/imx8qm_m4_0_TCM_rpmsg_lite_pingpong_rtos_linux_remote_m40.bin ${S}/${SOC_DIR}/m40_tcm.bin
+        cp ${DEPLOY_DIR_IMAGE}/imx8qm_m4_1_TCM_rpmsg_lite_pingpong_rtos_linux_remote_m41.bin ${S}/${SOC_DIR}/m41_tcm.bin
+        cp ${DEPLOY_DIR_IMAGE}/imx8qm_m4_0_TCM_rpmsg_lite_pingpong_rtos_linux_remote_m40.bin ${S}/${SOC_DIR}/m4_image.bin
+        cp ${DEPLOY_DIR_IMAGE}/imx8qm_m4_1_TCM_rpmsg_lite_pingpong_rtos_linux_remote_m41.bin ${S}/${SOC_DIR}/m4_1_image.bin
+
 
         cp ${DEPLOY_DIR_IMAGE}/mx8qm-ahab-container.img ${S}/${SOC_DIR}/
     fi
