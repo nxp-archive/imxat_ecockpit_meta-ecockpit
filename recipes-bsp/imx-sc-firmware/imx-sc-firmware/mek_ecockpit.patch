@@ -50,10 +50,10 @@ index 0000000..496815c
 +
 diff --git a/platform/board/mx8qm_mek_eco/board.c b/platform/board/mx8qm_mek_eco/board.c
 new file mode 100644
-index 0000000..d636f32
+index 0000000..b017a4e
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/board.c
-@@ -0,0 +1,1889 @@
+@@ -0,0 +1,1910 @@
 +/*
 +** ###################################################################
 +**
@@ -765,6 +765,8 @@ index 0000000..d636f32
 +    uint32_t i;
 +#ifdef ECOCKPIT_MEMORY_ISOLATION
 +    sc_rm_mr_t mr;
++    sc_rm_mr_t mr_shmem;
++    sc_rm_pt_t pt_shmem;
 +#endif
 +    a53_sec_part = pt_boot;
 +
@@ -843,6 +845,12 @@ index 0000000..d636f32
 +                memmap++;
 +                continue;
 +            }
++            /* skip the M4's TCM */
++            if ( (memmap->ss == SC_SUBSYS_M4_0) || (memmap->ss == SC_SUBSYS_M4_1) )
++            {
++                memmap++;
++                continue;
++            }
 +            /* Allocate for boot */
 +            err = rm_memreg_alloc(SC_PT, &mr_boot_mem, memmap->start, memmap->start + memmap->len - 1U);
 +            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n",
@@ -859,36 +867,14 @@ index 0000000..d636f32
 +        bool owned = rm_is_memreg_owned(a53_sec_part, mr);
 +        sc_faddr_t start, end;
 +        sc_rm_mr_t mr_a72, mr_a53;
-+        sc_rm_mr_t mr_bak;
 +        if (!owned) continue;
 +        err = rm_get_memreg_info(SC_PT, mr, &start, &end);
 +
 +        /* free region and re-create 4 new ones: trampoline region, A53 region, A72 region, backup region */
 +        if ((start == ADDR_32B_START) && (end == ADDR_32B_END))
 +        {
-+            /* region for A53 */
 +            err = rm_memreg_free(SC_PT, mr);
 +            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_free failed, err %d\n", err);
-+
-+            err = rm_memreg_alloc(SC_PT, &mr_a53, ADDR_32B_START, ECOCKPIT_IMG_BAK-1);
-+            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_START, ECOCKPIT_IMG_BAK-1, err);
-+
-+            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
-+            if (err != SC_ERR_NONE) board_print(0, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_START, ECOCKPIT_IMG_BAK-1, err);
-+
-+            /* region for A72 */
-+            err = rm_memreg_alloc(SC_PT, &mr_a72, ADDR_32B_MID, ADDR_32B_END);
-+            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, ADDR_32B_END, err);
-+
-+            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
-+            if (err != SC_ERR_NONE) board_print(0, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, ADDR_32B_END, err);
-+
-+            /* protect the boot-images backup region */
-+            err = rm_memreg_alloc(SC_PT, &mr_bak, ECOCKPIT_IMG_BAK, ADDR_32B_MID - 1);
-+            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", ECOCKPIT_IMG_BAK, ADDR_32B_MID-1, err);
-+
-+            err = rm_assign_memreg(SC_PT, SC_PT, mr_bak);
-+            if (err != SC_ERR_NONE) board_print(0, "Memreg backup assign failed, 0x%lx -- 0x%lx, err %d\n", ECOCKPIT_IMG_BAK, ADDR_32B_MID-1, err);
 +
 +            /* alloc a region for trampoline, assign it to A53 and grant access to A72 */
 +            err = rm_memreg_alloc(SC_PT, &mr_a72, (sc_faddr_t) BL31_BASE_A53, (sc_faddr_t) (BL31_BASE_A53 + MRC_MIN_SIZE));
@@ -899,6 +885,36 @@ index 0000000..d636f32
 +
 +            err = rm_set_memreg_permissions(SC_PT, mr_a72, a72_sec_part, SC_RM_PERM_SEC_R);
 +            if (err != SC_ERR_NONE) board_print(0, "rm_set_memreg_permissions(mr=%d) failed for A72, err %d\n", mr, err);
++
++            /* regions for A53 */
++            /* ATF A53 */
++            err = rm_memreg_alloc(SC_PT, &mr_a53, (sc_faddr_t) (BL31_BASE_A53 + MRC_MIN_SIZE + 1), BL31_LIMIT_A53-1);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", (BL31_BASE_A53 + MRC_MIN_SIZE + 1), BL31_LIMIT_A53-1, err);
++
++            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", (BL31_BASE_A53 + MRC_MIN_SIZE + 1), BL31_LIMIT_A53-1, err);
++
++            /* NS OS A53 */
++            err = rm_memreg_alloc(SC_PT, &mr_a53, (sc_faddr_t) BL31_LIMIT_A53, ADDR_32B_MID-1);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", BL31_LIMIT_A53, ADDR_32B_MID-1, err);
++
++            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", BL31_LIMIT_A53, ADDR_32B_MID-1, err);
++
++            /* region for A72 */
++            /* ATF A72 */
++            err = rm_memreg_alloc(SC_PT, &mr_a72, ADDR_32B_MID, BL31_LIMIT_A72-1);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, BL31_LIMIT_A72-1, err);
++
++            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, BL31_LIMIT_A72-1, err);
++
++            /* NS OS A72 */
++            err = rm_memreg_alloc(SC_PT, &mr_a72, BL31_LIMIT_A72, ADDR_32B_END);
++            if (err != SC_ERR_NONE) board_print(0, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", BL31_LIMIT_A72, ADDR_32B_END, err);
++
++            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
++            if (err != SC_ERR_NONE) board_print(0, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", BL31_LIMIT_A72, ADDR_32B_END, err);
 +        }
 +       if ((start == ADDR_64B_START) && (end == ADDR_64B_END))
 +        {
@@ -910,20 +926,21 @@ index 0000000..d636f32
 +            if (err != SC_ERR_NONE) board_print(0, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_64B_MID, ADDR_64B_END, err);
 +        }
 +    }
++
++    /* Use shared memory partition to communicate between A53 and A72 */
++    BRD_ERR(rm_partition_alloc(SC_PT, &pt_shmem, SC_FALSE, SC_TRUE,
++        SC_FALSE, SC_FALSE, SC_FALSE));
++
++    /* Create shared memory space */
++    BRD_ERR(rm_memreg_frag(pt_boot, &mr_shmem,
++        0x092000000ULL, 0x0923FFFFFULL));
++    BRD_ERR(rm_assign_memreg(SC_PT, pt_shmem, mr_shmem));
++    BRD_ERR(rm_set_memreg_permissions(SC_PT, mr_shmem, a53_sec_part,
++        SC_RM_PERM_FULL));
++    BRD_ERR(rm_set_memreg_permissions(SC_PT, mr_shmem, a72_sec_part,
++        SC_RM_PERM_FULL));
++
 +#endif /* ECOCKPIT_MEMORY_ISOLATION */
-+
-+    /* create a region that excludes ATF. This region will be assigned to the Non-Secure partition later on */
-+    /* do it for A53 partition */
-+    err = rm_memreg_alloc(SC_PT, &mr, (sc_faddr_t) BL31_LIMIT_A53, (sc_faddr_t) ECOCKPIT_IMG_BAK-1);
-+    if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed for A53, BL31_LIMIT_A53 - 0xffffffff, err %d\n", err);
-+    err = rm_assign_memreg(SC_PT, a53_sec_part, mr);
-+    if (err != SC_ERR_NONE) board_print(0, "rm_assign_memreg(mr=%d) failed for A53, err %d\n", mr, err);
-+
-+    /* do it for A72 partition */
-+    err = rm_memreg_alloc(SC_PT, &mr, (sc_faddr_t) BL31_LIMIT_A72, (sc_faddr_t) 0xffffffff);
-+    if (err != SC_ERR_NONE) board_print(0, "rm_memreg_alloc failed for A72, BL31_LIMIT_A72 - 0xffffffff, err %d\n", err);
-+    err = rm_assign_memreg(SC_PT, a72_sec_part, mr);
-+    if (err != SC_ERR_NONE) board_print(0, "rm_assign_memreg(mr=%d) failed for A72, err %d\n", mr, err);
 +
 +    if (alt_config != SC_FALSE)
 +    {
@@ -954,18 +971,16 @@ index 0000000..d636f32
 +            SC_P_M40_GPIO0_01, SC_TRUE));
 +
 +        /* Move some resources not in the M4_0 subsystem */
-+        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_SYSTEM,
-+            SC_R_SYSTEM, SC_TRUE));
 +        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_IRQSTR_M4_0,
 +            SC_R_IRQSTR_M4_0, SC_TRUE));
 +        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_5B,
 +            SC_R_MU_5B, SC_TRUE));
 +        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_7A,
 +            SC_R_MU_7A, SC_TRUE));
-+        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_8B,
-+            SC_R_MU_8B, SC_TRUE));
 +        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_GPT_4,
 +            SC_R_GPT_4, SC_TRUE));
++        /* Caution: SC_R_MU8B is not set as movable as it is needed by A53-A72 comm. */
++        /* Caution: SC_R_SYSTEM is not set as movable as it is needed by A72 */
 +
 +        /* Move everything flagged as movable */
 +        BRD_ERR(rm_move_all(pt_boot, pt_boot, pt_m4_0, SC_TRUE, SC_TRUE));
@@ -1048,10 +1063,16 @@ index 0000000..d636f32
 +        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_1, mr_m4_1));
 +
 +        /* Allow AP and M4_1 to use SYSTEM */
-+        BRD_ERR(rm_set_peripheral_permissions(pt_m4_0, SC_R_SYSTEM,
-+            pt_boot, SC_RM_PERM_SEC_RW));
-+        BRD_ERR(rm_set_peripheral_permissions(pt_m4_0, SC_R_SYSTEM,
++#ifdef ECOCKPIT_M4_USE_SYSTEM
++        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
++            pt_m4_0, SC_RM_PERM_SEC_RW));
++        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
++            a53_sec_part, SC_RM_PERM_SEC_RW));
++        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
++            a72_sec_part, SC_RM_PERM_SEC_RW));
++        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
 +            pt_m4_1, SC_RM_PERM_SEC_RW));
++#endif
 +
 +        /* Move partition to be owned by SC */
 +        BRD_ERR(rm_set_parent(pt_boot, pt_m4_0, SC_PT));
@@ -4189,10 +4210,10 @@ index 0000000..f8aa55b
 +
 diff --git a/platform/board/mx8qm_mek_eco/split.h b/platform/board/mx8qm_mek_eco/split.h
 new file mode 100644
-index 0000000..378d173
+index 0000000..fc32c07
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/split.h
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,278 @@
 +/*
 +** ###################################################################
 +**
@@ -4277,6 +4298,7 @@ index 0000000..378d173
 +
 +sc_rsrc_t a72_ns_rsrcs[] = {
 +    SC_R_MU_2A,
++    SC_R_MU_8B,
 +    /* display & gfx resources */
 +    SC_R_GPU_1_PID0,
 +    SC_R_GPU_1_PID1,
