@@ -1,41 +1,19 @@
-This README file contains information on the contents of the ../sources/meta-ecockpit layer.
+This README file contains information on building the eCockpit solution using Yocto Project
 
-Please see the corresponding sections below for details.
-
-Dependencies
+Yocto build setup
 ============
+$: EULA=1 MACHINE=imx8qmmekecockpitDISTRO=fsl-imx-xwayland source ./nxp-setup-ecockpit.sh -b build-ecockpit
 
-  URI: <first dependency>
-  branch: <branch name>
+Yocto configuration file modifying
+============
+eCockpit solution is built by default to support Linux on Cortex-A53 for the Instrument Cluster and Android 
+on Cortex-A72 for the in-Vehicle Infotainment system. If the desired configuration is Linux for IC and Linux 
+for the IVI, the U-boot defconfig for Cortex-A72 must be changed. This can be specified in the local.conf file from the build directory.
 
-  URI: <second dependency>
-  branch: <branch name>
+UBOOT_CONFIG[a72]= "imx8qm_mek_a72_defconfig"
+SRCBRANCH_pn-u-boot-imx-a72= "ecockpit_4.14.98_2.0.0_ga-dev"
+SRCREV_pn-u-boot-imx-a72 = "ecockpit_06_01
 
-  .
-  .
-  .
-
-Patches
-=======
-
-Please submit any patches against the ../sources/meta-ecockpit layer to the xxxx mailing list (xxxx@zzzz.org)
-and cc: the maintainer:
-
-Maintainer: XXX YYYYYY <xxx.yyyyyy@zzzzz.com>
-
-Table of Contents
-=================
-
-  I. Adding the ../sources/meta-ecockpit layer to your build
- II. Misc
-
-
-I. Adding the ../sources/meta-ecockpit layer to your build
-=================================================
-
-Run 'bitbake-layers add-layer ../sources/meta-ecockpit'
-
-II. Misc
-========
-
---- replace with specific information about the ../sources/meta-ecockpit layer ---
+Image building The image should be built withQt 5 support:
+============
+$: bitbake fsl-image-qt5
