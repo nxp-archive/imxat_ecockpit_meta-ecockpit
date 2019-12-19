@@ -70,29 +70,29 @@ echo EULA=1 MACHINE=$MACHINE DISTRO=$DISTRO source $RELEASEPROGNAME -b $BUILD_DI
 EULA=1 MACHINE=$MACHINE DISTRO=$DISTRO source $RELEASEPROGNAME -b $BUILD_DIR
 
 echo -e "\n## eCockpit Repositories" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_MIRROR = \"git://bitbucket.sw.nxp.com/mss\"" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_BRANCH = \"ecockpit_4.14.98_2.0.0_ga-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_REVISION = \"ecockpit_06_01\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_MIRROR = \"git://bitbucket.sw.nxp.com/~nxa06753\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_BRANCH = \"ecockpit-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_REVISION = \"HEAD\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nATF_SRC_pn-imx-atf = \"\${ECOCKPIT_MIRROR}/arm-trusted-firmware-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-imx-atf = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-imx-atf = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-imx-atf = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-imx-atf = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nUBOOT_SRC_pn-u-boot-imx = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-u-boot-imx = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-u-boot-imx = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-u-boot-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-u-boot-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nUBOOT_SRC_pn-u-boot-imx-a72 = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-u-boot-imx-a72 = \"ecockpit_p9.0.0_2.0.0_ga-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-u-boot-imx-a72 = \"ecockpit_android_06_01\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-u-boot-imx-a72 = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-u-boot-imx-a72 = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nIMX_MKIMAGE_SRC = \"\${ECOCKPIT_MIRROR}/imx-mkimage-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-imx-boot = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-imx-boot = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-imx-boot = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-imx-boot = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nKERNEL_SRC_pn-linux-imx = \"\${ECOCKPIT_MIRROR}/linux-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-linux-imx = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-linux-imx = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-linux-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-linux-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nPREFERRED_VERSION_imx-sc-firmware = \"8qm-ecockpit\"" >> $BUILD_DIR/conf/local.conf
 
