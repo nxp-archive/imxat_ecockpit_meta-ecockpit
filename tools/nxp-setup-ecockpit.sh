@@ -28,10 +28,11 @@ ecockpit_usage()
 {
     echo -e "\nDescription: nxp-setup-ecockpit.sh will setup the bblayers and local.conf for an eCockpit build."
     echo -e "\nUsage: source nxp-setup-ecockpit.sh
-    Optional parameters: [-b build-dir] [-h]"
+    Optional parameters: [-b build-dir] [-h] [-i]"
     echo "
     * [-b build-dir]: Build directory, if unspecified, script uses 'build-ecockpit' as the output directory
     * [-h]: help
+    * [-i]: internal nxp build
 "
 }
 
@@ -42,9 +43,11 @@ ecockpit_cleanup()
     unset ecockpit_usage ecockpit_cleanup ecockpit_exit_message
 }
 
+RELEASEPROGNAME="./fsl-setup-release.sh"
+
 echo Reading command line parameters
 # Read command line parameters
-while getopts "k:r:t:b:e:gh" nxp_setup_flag
+while getopts "b:h:i" nxp_setup_flag
 do
     case $nxp_setup_flag in
         b) BUILD_DIR="$OPTARG";
@@ -52,12 +55,13 @@ do
            ;;
         h) nxp_setup_help='true';
            ;;
+        i) RELEASEPROGNAME="./fsl-setup-internal-build.sh"
+           ;;
         ?) nxp_setup_error='true';
            ;;
     esac
 done
 
-RELEASEPROGNAME="./fsl-setup-release.sh"
 
 # get command line options
 OLD_OPTIND=$OPTIND
