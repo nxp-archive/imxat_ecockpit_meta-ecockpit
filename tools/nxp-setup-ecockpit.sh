@@ -82,13 +82,15 @@ echo -e "\nATF_SRC_pn-imx-atf = \"\${ECOCKPIT_MIRROR}/arm-trusted-firmware-ecock
 echo -e "SRCBRANCH_pn-imx-atf = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-imx-atf = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "\nUBOOT_SRC_pn-u-boot-imx = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCBRANCH_pn-u-boot-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nSRC_URI_pn-u-boot-imx = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-u-boot-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "LOCALVERSION_pn-u-boot-imx = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "\nUBOOT_SRC_pn-u-boot-imx-a72 = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCBRANCH_pn-u-boot-imx-a72 = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nSRC_URI_pn-u-boot-imx-a72 = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCREV_pn-u-boot-imx-a72 = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "LOCALVERSION_pn-u-boot-imx-a72 = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nIMX_MKIMAGE_SRC = \"\${ECOCKPIT_MIRROR}/imx-mkimage-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCBRANCH_pn-imx-boot = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
