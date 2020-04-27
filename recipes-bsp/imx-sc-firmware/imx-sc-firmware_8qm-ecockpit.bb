@@ -1,5 +1,5 @@
 # Copyright (C) 2016 Freescale Semiconductor
-# Copyright 2017-2019 NXP
+# Copyright 2017-2020 NXP
 
 DESCRIPTION = "i.MX System Controller Firmware"
 LICENSE = "Proprietary"
@@ -20,7 +20,7 @@ do_compile() {
 	cd ${S}
     # TODO: Change the path to installed Cortex-M4 toolchain
 	export TOOLS="/opt"
-	FLAGS="-DECOCKPIT" oe_runmake X=1 qm M=1 B=mek_eco R=B0
+	FLAGS="-DECOCKPIT_M4_0  -DECOCKPIT_M4_1" make qm B=mek_eco M=0 X=1 U=0 R=B0
 }
 do_install () {
     install -d ${STAGING_DIR}/boot
