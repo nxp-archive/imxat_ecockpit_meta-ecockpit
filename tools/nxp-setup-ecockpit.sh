@@ -43,7 +43,7 @@ ecockpit_cleanup()
     unset ecockpit_usage ecockpit_cleanup ecockpit_exit_message
 }
 
-RELEASEPROGNAME="./fsl-setup-release.sh"
+RELEASEPROGNAME="./imx-setup-release.sh"
 
 echo Reading command line parameters
 # Read command line parameters
@@ -74,36 +74,45 @@ echo EULA=1 MACHINE=$MACHINE DISTRO=$DISTRO source $RELEASEPROGNAME -b $BUILD_DI
 EULA=1 MACHINE=$MACHINE DISTRO=$DISTRO source $RELEASEPROGNAME -b $BUILD_DIR
 
 echo -e "\n## eCockpit Repositories" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_MIRROR = \"git://bitbucket.sw.nxp.com/~nxa06753\"" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_BRANCH = \"ecockpit-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_REVISION = \"HEAD\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_MIRROR = \"git://bitbucket.sw.nxp.com/mss\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_BRANCH = \"ecockpit_5.4.3_2.0.0-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_REVISION = \"ecockpit_07_00\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nATF_SRC_pn-imx-atf = \"\${ECOCKPIT_MIRROR}/arm-trusted-firmware-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-imx-atf = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-imx-atf = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-imx-atf = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-imx-atf = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "SRCBRANCH_pn-u-boot-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "\nSRC_URI_pn-u-boot-imx = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-u-boot-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nSRCBRANCH_pn-u-boot-imx = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRC_URI_pn-u-boot-imx = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-u-boot-imx = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "LOCALVERSION_pn-u-boot-imx = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "SRCBRANCH_pn-u-boot-imx-a72 = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "\nSRC_URI_pn-u-boot-imx-a72 = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-u-boot-imx-a72 = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nSRCBRANCH_pn-u-boot-imx-a72 = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRC_URI_pn-u-boot-imx-a72 = \"\${ECOCKPIT_MIRROR}/uboot-ecockpit.git;protocol=ssh;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-u-boot-imx-a72 = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "LOCALVERSION_pn-u-boot-imx-a72 = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nIMX_MKIMAGE_SRC = \"\${ECOCKPIT_MIRROR}/imx-mkimage-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-imx-boot = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-imx-boot = \"ecockpit_4.19.35_1.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCBRANCH_pn-imx-boot = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-imx-boot = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nKERNEL_SRC_pn-linux-imx = \"\${ECOCKPIT_MIRROR}/linux-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCBRANCH_pn-linux-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-linux-imx = \"ecockpit_5.4_next-dev\"" >> $BUILD_DIR/conf/local.conf
+echo -e "KERNEL_BRANCH_pn-linux-imx = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-linux-imx = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "LOCALVERSION_pn-linux-imx = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
+
+echo -e "\nSRCBRANCH_pn-optee-os = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "OPTEE_OS_SRC_pn-optee-os = \"\${ECOCKPIT_MIRROR}/imx-optee-os-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-optee-os = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+
+echo -e "\nSRCBRANCH_pn-optee-os-a72 = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "OPTEE_OS_SRC_pn-optee-os-a72 = \"\${ECOCKPIT_MIRROR}/imx-optee-os-ecockpit.git;protocol=ssh\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-optee-os-a72 = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nPREFERRED_VERSION_imx-sc-firmware = \"8qm-ecockpit\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\n## eCockpit layer" >> $BUILD_DIR/conf/bblayers.conf
-hook_in_layer meta-ecockpit meta-fsl-bsp-release/imx/meta-bsp
+hook_in_layer meta-ecockpit meta-imx/meta-bsp
 
 echo done except for cleanup
 
