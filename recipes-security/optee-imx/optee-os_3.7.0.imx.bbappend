@@ -1,0 +1,3 @@
+PLATFORM_FLAVOR="mx8qmmeka53"
+
+EXTRA_OEMAKE_remove = "CFG_WERROR=y"
