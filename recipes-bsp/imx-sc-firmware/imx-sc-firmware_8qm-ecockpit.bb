@@ -28,7 +28,7 @@ do_install () {
 }
 
 do_deploy () {
-    install -d ${DEPLOY_DIR_IMAGE}
+    install -d ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}
     install -m 0755 ${S}/build_mx8qm_b0/${SC_FIRMWARE_NAME} ${DEPLOY_DIR_IMAGE}/${BOOT_TOOLS}/${SC_FIRMWARE_NAME}
 
 }
