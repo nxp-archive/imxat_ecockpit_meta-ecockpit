@@ -17,7 +17,7 @@ do_compile () {
         cp ${DEPLOY_DIR_IMAGE}/imx8qm_m4_1_TCM_rpmsg_lite_pingpong_rtos_linux_remote_m41.bin ${S}/${SOC_DIR}/m4_1_image.bin
 
 
-        cp ${DEPLOY_DIR_IMAGE}/mx8qm-ahab-container.img ${S}/${SOC_DIR}/
+        cp ${DEPLOY_DIR_IMAGE}/mx8qmb0-ahab-container.img ${S}/${SOC_DIR}/
     fi
 
     # mkimage for i.MX8
@@ -39,7 +39,7 @@ do_deploy () {
         if [ "${MACHINE}" = "imx8qma0mek" ]; then
             install -m 0644 ${S}/${SOC_DIR}/${DCD_NAME} ${DEPLOYDIR}/${DEPLOYDIR_IMXBOOT}
         fi
-        install -m 0644 ${S}/${SOC_DIR}/mx8qm-ahab-container.img ${DEPLOYDIR}/${DEPLOYDIR_IMXBOOT}
+        install -m 0644 ${S}/${SOC_DIR}/mx8qmb0-ahab-container.img ${DEPLOYDIR}/${DEPLOYDIR_IMXBOOT}
 
         install -m 0755 ${S}/${TOOLS_NAME} ${DEPLOYDIR}/${BOOT_TOOLS}
     fi
