@@ -76,7 +76,7 @@ EULA=1 MACHINE=$MACHINE DISTRO=$DISTRO source $RELEASEPROGNAME -b $BUILD_DIR
 echo -e "\n## eCockpit Repositories" >> $BUILD_DIR/conf/local.conf
 echo -e "ECOCKPIT_MIRROR = \"git://source.codeaurora.org/external/imxat/ecockpit\"" >> $BUILD_DIR/conf/local.conf
 echo -e "ECOCKPIT_BRANCH = \"ecockpit_5.4.3_2.0.0-dev\"" >> $BUILD_DIR/conf/local.conf
-echo -e "ECOCKPIT_REVISION = \"ecockpit_07_00\"" >> $BUILD_DIR/conf/local.conf
+echo -e "ECOCKPIT_REVISION = \"ecockpit_07_01\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nATF_SRC_pn-imx-atf = \"\${ECOCKPIT_MIRROR}/arm-trusted-firmware.git;protocol=https\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRCBRANCH_pn-imx-atf = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
@@ -87,9 +87,9 @@ echo -e "SRC_URI_pn-u-boot-imx = \"\${ECOCKPIT_MIRROR}/uboot-imx.git;protocol=ht
 echo -e "SRCREV_pn-u-boot-imx = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
 echo -e "LOCALVERSION_pn-u-boot-imx = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 
-echo -e "\nSRCBRANCH_pn-u-boot-imx-a72 = \"\${ECOCKPIT_BRANCH}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "\nSRCBRANCH_pn-u-boot-imx-a72 = \"ecockpit_10.0.0_2.1.0-dev\"" >> $BUILD_DIR/conf/local.conf
 echo -e "SRC_URI_pn-u-boot-imx-a72 = \"\${ECOCKPIT_MIRROR}/uboot-imx.git;protocol=https;branch=\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
-echo -e "SRCREV_pn-u-boot-imx-a72 = \"\${ECOCKPIT_REVISION}\"" >> $BUILD_DIR/conf/local.conf
+echo -e "SRCREV_pn-u-boot-imx-a72 = \"ecockpit_android_07_01\"" >> $BUILD_DIR/conf/local.conf
 echo -e "LOCALVERSION_pn-u-boot-imx-a72 = \"-\${SRCBRANCH}\"" >> $BUILD_DIR/conf/local.conf
 
 echo -e "\nIMX_MKIMAGE_SRC = \"\${ECOCKPIT_MIRROR}/imx-mkimage.git;protocol=https\"" >> $BUILD_DIR/conf/local.conf
