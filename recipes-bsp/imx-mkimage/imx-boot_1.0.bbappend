@@ -1,4 +1,4 @@
-IMXBOOT_TARGETS = "flash_ecockpit_b0_m4_spl"
+IMXBOOT_TARGETS = "flash_ecockpit_b0_m4"
 
 do_compile[depends] += "u-boot-imx-a72:do_deploy"
 do_compile[depends] += "optee-os-a72:do_deploy"

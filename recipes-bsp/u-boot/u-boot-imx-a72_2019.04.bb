@@ -22,7 +22,7 @@ inherit fsl-u-boot-localversion
 LOCALVERSION ?= "-${SRCBRANCH}"
 
 UBOOT_CONFIG = "a72"
-UBOOT_CONFIG[a72] ?= "imx8qm_mek_a72_defconfig"
+UBOOT_CONFIG[a72] ?= "imx8qm_mek_a72_android_defconfig"
 
 BOOT_TOOLS = "imx-boot-tools"
 
