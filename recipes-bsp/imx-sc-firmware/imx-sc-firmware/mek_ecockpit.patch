@@ -1,6 +1,6 @@
 diff --git a/platform/board/mx8qm_mek_eco/Makefile b/platform/board/mx8qm_mek_eco/Makefile
 new file mode 100755
-index 0000000..d630322
+index 000000000..d630322bb
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/Makefile
 @@ -0,0 +1,61 @@
@@ -67,7 +67,7 @@ index 0000000..d630322
 +
 diff --git a/platform/board/mx8qm_mek_eco/board.bom b/platform/board/mx8qm_mek_eco/board.bom
 new file mode 100755
-index 0000000..6879226
+index 000000000..6879226b1
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/board.bom
 @@ -0,0 +1,40 @@
@@ -113,7 +113,7 @@ index 0000000..6879226
 +
 diff --git a/platform/board/mx8qm_mek_eco/board.c b/platform/board/mx8qm_mek_eco/board.c
 new file mode 100644
-index 0000000..b03b384
+index 000000000..f539572ff
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/board.c
 @@ -0,0 +1,2160 @@
@@ -362,7 +362,7 @@ index 0000000..b03b384
 +const sc_faddr_t ADDR_32B_END =     0x0FFFFFFFF;
 +const sc_faddr_t ADDR_64B_START =   0x880000000;
 +const sc_faddr_t ADDR_64B_MID =     0x900000000;
-+const sc_faddr_t ADDR_64B_END =     0xFFFFFFFFF;
++const sc_faddr_t ADDR_64B_END =     0x97FFFFFFF;
 +const sc_faddr_t ECOCKPIT_IMG_BAK = 0x0BFE00000;
 +
 +sc_rm_pt_t a72_sec_part;
@@ -2279,7 +2279,7 @@ index 0000000..b03b384
 +
 diff --git a/platform/board/mx8qm_mek_eco/board.h b/platform/board/mx8qm_mek_eco/board.h
 new file mode 100755
-index 0000000..809f452
+index 000000000..809f45239
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/board.h
 @@ -0,0 +1,118 @@
@@ -2403,7 +2403,7 @@ index 0000000..809f452
 +
 diff --git a/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser.cfg b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser.cfg
 new file mode 100755
-index 0000000..3cb7e82
+index 000000000..3cb7e82c5
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser.cfg
 @@ -0,0 +1,143 @@
@@ -2552,7 +2552,7 @@ index 0000000..3cb7e82
 +
 diff --git a/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser_DRC0_only.cfg b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser_DRC0_only.cfg
 new file mode 100755
-index 0000000..b07ef53
+index 000000000..b07ef53f0
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/dcd/ddr_stress_test_parser_DRC0_only.cfg
 @@ -0,0 +1,142 @@
@@ -2700,7 +2700,7 @@ index 0000000..b07ef53
 +
 diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz.cfg
 new file mode 100755
-index 0000000..bd24477
+index 000000000..bd2447746
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_1.6GHz.cfg
 @@ -0,0 +1,592 @@
@@ -3298,7 +3298,7 @@ index 0000000..bd24477
 +ddrc_lpddr4_derate_init(BD_DDR_RET_NUM_DRC);
 diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_800MHz.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_800MHz.cfg
 new file mode 100755
-index 0000000..381c21e
+index 000000000..381c21e24
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_800MHz.cfg
 @@ -0,0 +1,515 @@
@@ -3819,7 +3819,7 @@ index 0000000..381c21e
 +ddrc_lpddr4_derate_init(BD_DDR_RET_NUM_DRC);
 diff --git a/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_emul.cfg b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_emul.cfg
 new file mode 100755
-index 0000000..f8aa55b
+index 000000000..f8aa55b97
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/dcd/imx8qm_dcd_emul.cfg
 @@ -0,0 +1,216 @@
@@ -4041,7 +4041,7 @@ index 0000000..f8aa55b
 +
 diff --git a/platform/board/mx8qm_mek_eco/split.h b/platform/board/mx8qm_mek_eco/split.h
 new file mode 100644
-index 0000000..28672f3
+index 000000000..28672f3d2
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/split.h
 @@ -0,0 +1,283 @@
