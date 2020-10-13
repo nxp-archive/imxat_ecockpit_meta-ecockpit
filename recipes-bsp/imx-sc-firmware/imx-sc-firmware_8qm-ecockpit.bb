@@ -20,7 +20,7 @@ do_compile() {
 	cd ${S}
     # TODO: Change the path to installed Cortex-M4 toolchain
 	export TOOLS="/opt"
-	FLAGS="-DECOCKPIT_M4_0  -DECOCKPIT_M4_1" make qm B=mek_eco M=0 X=1 U=0 R=B0
+	FLAGS="-DECOCKPIT_M4_0  -DECOCKPIT_M4_1 -DNOSPL" make qm B=mek_eco M=0 X=1 U=0 R=B0
 }
 do_install () {
     install -d ${STAGING_DIR}/boot
