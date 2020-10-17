@@ -9,6 +9,7 @@ inherit pythonnative
 PROVIDES_remove = "virtual/bootloader"
 DEPENDS_append = " flex-native bison-native python dtc-native imx-seco imx-sc-firmware"
 do_compile[depends] += "imx-seco:do_deploy"
+do_compile[depends] += "imx-sc-firmware:do_deploy"
 
 LICENSE = "GPLv2+"
 LIC_FILES_CHKSUM = "file://Licenses/gpl-2.0.txt;md5=b234ee4d69f5fce4486a80fdaf4a4263"
