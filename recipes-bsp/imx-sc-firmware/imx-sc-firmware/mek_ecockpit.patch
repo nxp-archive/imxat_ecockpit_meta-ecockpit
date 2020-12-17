@@ -113,10 +113,10 @@ index 000000000..6879226b1
 +
 diff --git a/platform/board/mx8qm_mek_eco/board.c b/platform/board/mx8qm_mek_eco/board.c
 new file mode 100644
-index 000000000..72298cde5
+index 000000000..7179f8df3
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/board.c
-@@ -0,0 +1,2142 @@
+@@ -0,0 +1,2249 @@
 +/*
 +** ###################################################################
 +**
@@ -195,11 +195,15 @@ index 000000000..72298cde5
 +#include "split.h"
 +#include "soc.h"
 +
++#include "drivers/mu/fsl_mu.h"
 +/* Local Defines */
 +#define ECOCKPIT_M4_1 1
-+#define ECOCKPIT_M4_0 1
++#ifdef ECOCKPIT_M4_0
++#undef ECOCKPIT_M4_0
++#endif
 +#define ECOCKPIT_M4_USE_SYSTEM 1
 +#define NOSPL 1
++#define EVS 1
 +
 +/* timeout in us when waiting for A53 to boot */
 +#define BOOT_TIMEOUT_US         1000000
@@ -286,6 +290,7 @@ index 000000000..72298cde5
 +    #define DEBUG_BAUD          115200U
 +#endif
 +
++#define LSIO_MU12A_BASE         0x5D270000U
 +/* Local Types */
 +
 +/* Local Functions */
@@ -304,6 +309,8 @@ index 000000000..72298cde5
 +static uint32_t temp_alarm0;
 +static uint32_t temp_alarm1;
 +
++static sc_rm_pt_t g_pt_boot;
++static sc_rm_pt_t g_pt_m4_1;
 +/*!
 + * This constant contains info to map resources to the board.
 + * DO NOT CHANGE - must match object code.
@@ -370,6 +377,8 @@ index 000000000..72298cde5
 +
 +sc_rm_pt_t a72_sec_part;
 +sc_rm_pt_t a53_sec_part;
++
++#define ADDRTO32B(a) (uint32_t) (a & 0x0FFFFFFFF)
 +
 +/*--------------------------------------------------------------------------*/
 +/* Init                                                                     */
@@ -958,33 +967,28 @@ index 000000000..72298cde5
 +    {
 +        if (memmap->mem)
 +        {
-+            sc_rm_mr_t mr_boot_mem;
++            sc_rm_mr_t mr_boot_mem = SC_RM_NUM_MEMREG;
 +
-+            /* skip this region: will split it from A53 region */
-+            if ( ((memmap->start == ADDR_32B_START) && ((memmap->start + memmap->len - 1U) == ADDR_32B_END))
-+                    || ((memmap->start == ADDR_64B_START) && ((memmap->start + memmap->len - 1U) == ADDR_64B_END)) )
-+            {
-+                memmap++;
-+                continue;
-+            }
 +            /* skip the M4's TCM */
 +            if ( (memmap->ss == SC_SUBSYS_M4_0) || (memmap->ss == SC_SUBSYS_M4_1) )
 +            {
 +                memmap++;
 +                continue;
 +            }
-+            /* skip the HSIO_SS_BASE1 & HSIO_SS_BASE2 as A72 does not own the associated resources */
-+            if (memmap->ss == SC_SUBSYS_HSIO)
++            /* skip DDR regions: will split it from A53 region */
++            if (memmap->ss == SC_SUBSYS_DB)
 +            {
 +                memmap++;
 +                continue;
 +            }
-+            /* Allocate for boot */
-+            err = rm_memreg_alloc(SC_PT, &mr_boot_mem, memmap->start, memmap->start + memmap->len - 1U);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n",
-+                    memmap->start, (memmap->start + memmap->len - 1U), err);
-+            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_boot_mem);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_assign_memreg(mr=%d) failed, err %d\n", mr_boot_mem, err);
++            /* find boot mem region */
++            err = rm_find_memreg(SC_PT, &mr_boot_mem, memmap->start, memmap->start + memmap->len - 1U);
++            if ((err != SC_ERR_NONE) || (mr_boot_mem == SC_RM_NUM_MEMREG))
++                board_print(3, "line %d: rm_find_memreg failed, 0x%lx -- 0x%lx, err %d\n",
++                    __LINE__, ADDRTO32B(memmap->start), ADDRTO32B((memmap->start + memmap->len - 1U)), err);
++            /* grant access to A72 */
++            err = rm_set_memreg_permissions(SC_PT, mr_boot_mem, a72_sec_part, SC_RM_PERM_FULL);
++            if (err != SC_ERR_NONE) board_print(3, "rm_set_memreg_permissions(mr=%d) failed, err %d\n", mr_boot_mem, err);
 +        }
 +        memmap++;
 +    }
@@ -1019,28 +1023,28 @@ index 000000000..72298cde5
 +            /* alloc a region for trampoline, assign it to A53 and grant access to A72 */
 +#ifdef TRAMPOLINE_MEMREG
 +            err = rm_memreg_alloc(SC_PT, &mr_a72, (sc_faddr_t) BL31_BASE_A53, (sc_faddr_t) (BL31_BASE_A53 + MRC_MIN_SIZE));
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", BL31_BASE_A53, (BL31_BASE_A53 + MRC_MIN_SIZE), err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_split failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a72);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", BL31_BASE_A53, (BL31_BASE_A53 + MRC_MIN_SIZE), err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A53 assign failed, err %d\n", __LINE__, err);
 +            err = rm_set_memreg_permissions(SC_PT, mr_a72, a72_sec_part, SC_RM_PERM_SEC_R);
 +            if (err != SC_ERR_NONE) board_print(3, "rm_set_memreg_permissions(mr=%d) failed for A72, err %d\n", mr, err);
 +
 +            /* regions for A53 */
 +            /* ATF A53 */
 +            err = rm_memreg_alloc(SC_PT, &mr_a53, (sc_faddr_t) (BL31_BASE_A53 + MRC_MIN_SIZE + 1), BL31_LIMIT_A53-1);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", (BL31_BASE_A53 + MRC_MIN_SIZE + 1), BL31_LIMIT_A53-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_alloc failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", (BL31_BASE_A53 + MRC_MIN_SIZE + 1), BL31_LIMIT_A53-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A53 assign failed, err %d\n", __LINE__, err);
 +#else
 +            /* regions for A53 */
 +            /* ATF A53 */
 +            err = rm_memreg_alloc(SC_PT, &mr_a53, (sc_faddr_t) BL31_BASE_A53, BL31_LIMIT_A53-1);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", BL31_BASE_A53, BL31_LIMIT_A53-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_alloc failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", BL31_BASE_A53, BL31_LIMIT_A53-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A53 assign failed, err %d\n", __LINE__, err);
 +            /* grant read-access to a72 to be able to jump on trampoline */
 +            err = rm_set_memreg_permissions(SC_PT, mr_a53, a72_sec_part, SC_RM_PERM_SEC_R);
 +            if (err != SC_ERR_NONE) board_print(3, "rm_set_memreg_permissions(mr=%d) failed for A72, err %d\n", mr, err);
@@ -1048,34 +1052,34 @@ index 000000000..72298cde5
 +
 +            /* NS OS A53 */
 +            err = rm_memreg_alloc(SC_PT, &mr_a53, (sc_faddr_t) BL31_LIMIT_A53, ADDR_32B_MID-1);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_alloc failed, 0x%lx -- 0x%lx, err %d\n", BL31_LIMIT_A53, ADDR_32B_MID-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_alloc failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a53_sec_part, mr_a53);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A53 assign failed, 0x%lx -- 0x%lx, err %d\n", BL31_LIMIT_A53, ADDR_32B_MID-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A53 assign failed, err %d\n", __LINE__, err);
 +
 +            /* region for A72 */
 +            /* ATF A72 */
 +            err = rm_memreg_alloc(SC_PT, &mr_a72, ADDR_32B_MID, BL32_BASE_A72-1);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, BL32_BASE_A72-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_split failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_32B_MID, BL32_BASE_A72-1, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A72 assign failed, err %d\n", __LINE__, err);
 +
 +            /* TEE OS A72 */
 +            err = rm_memreg_alloc(SC_PT, &mr_a72, BL32_BASE_A72, ADDR_32B_END);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", BL32_BASE_A72, ADDR_32B_END, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_split failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", BL32_BASE_A72, ADDR_32B_END, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A72 assign failed, err %d\n", __LINE__, err);
 +        }
 +        else if ((start == ADDR_64B_START) && (end == ADDR_64B_END))
 +        {
 +            /* A72 has second half of 64bits addresses */
 +            err = rm_memreg_split(SC_PT, mr, &mr_a72, ADDR_64B_MID, ADDR_64B_END);
-+            if (err != SC_ERR_NONE) board_print(3, "rm_memreg_split failed, 0x%lx -- 0x%lx, err %d\n", ADDR_64B_MID, ADDR_64B_END, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: rm_memreg_split failed, err %d\n", __LINE__, err);
 +
 +            err = rm_assign_memreg(SC_PT, a72_sec_part, mr_a72);
-+            if (err != SC_ERR_NONE) board_print(3, "Memreg A72 assign failed, 0x%lx -- 0x%lx, err %d\n", ADDR_64B_MID, ADDR_64B_END, err);
++            if (err != SC_ERR_NONE) board_print(3, "line %d: Memreg A72 assign failed, err %d\n", __LINE__, err);
 +        }
 +    }
 +
@@ -1093,6 +1097,67 @@ index 000000000..72298cde5
 +        SC_RM_PERM_FULL));
 +
 +#endif /* ECOCKPIT_MEMORY_ISOLATION */
++    return err;
++}
++
++sc_err_t mark_shared_resources(sc_rm_pt_t pt_src, sc_bool_t movable)
++{
++    sc_err_t err = SC_ERR_NONE;
++
++    BRD_ERR(rm_set_subsys_rsrc_movable(pt_src, SC_R_CSI_0, movable));
++    //BRD_ERR(rm_set_subsys_rsrc_movable(pt_src, SC_R_CSI_1, movable));
++    BRD_ERR(rm_set_subsys_rsrc_movable(pt_src, SC_R_LVDS_1, movable));
++    //BRD_ERR(rm_set_subsys_rsrc_movable(pt_src, SC_R_LVDS_0, movable));
++    BRD_ERR(rm_set_subsys_rsrc_movable(pt_src, SC_R_DC_1, movable));
++    //BRD_ERR(rm_set_subsys_rsrc_movable(pt_src, SC_R_DC_0, movable));
++    BRD_ERR(rm_set_resource_movable(pt_src, SC_R_ISI_CH0,
++            SC_R_ISI_CH0, movable));
++
++    /* Move some pads not in the M4_1 subsystem */
++    BRD_ERR(rm_set_pad_movable(pt_src, SC_P_M41_I2C0_SCL,
++            SC_P_M41_GPIO0_01, movable));
++    //BRD_ERR(rm_set_pad_movable(pt_src, SC_P_LVDS0_I2C0_SDA,
++    //    SC_P_LVDS0_I2C1_SDA, movable));
++    BRD_ERR(rm_set_pad_movable(pt_src, SC_P_LVDS0_I2C0_SCL,
++            SC_P_LVDS0_I2C0_SCL, movable));/* SC_P_LVDS0_I2C0_SCL is also used for LVDS1_EN pin*/
++    BRD_ERR(rm_set_pad_movable(pt_src, SC_P_LVDS1_I2C1_SCL,
++            SC_P_LVDS1_I2C1_SDA, movable));
++
++    BRD_ERR(rm_set_pad_movable(pt_src, SC_P_MIPI_CSI0_MCLK_OUT,
++            SC_P_MIPI_CSI0_GPIO0_01, movable));
++    //BRD_ERR(rm_set_pad_movable(pt_src, SC_P_MIPI_CSI1_MCLK_OUT,
++    //    SC_P_MIPI_CSI1_I2C0_SDA, movable));
++
++    //BRD_ERR(rm_set_pad_movable(pt_src, SC_P_MIPI_DSI0_I2C0_SCL,
++    //    SC_P_MIPI_DSI0_I2C0_SDA, movable));
++    //BRD_ERR(rm_set_pad_movable(pt_src, SC_P_MIPI_DSI1_I2C0_SCL,
++    //    SC_P_MIPI_DSI1_I2C0_SDA, movable));
++
++    return err;
++}
++
++sc_err_t board_assign_resources(sc_rm_pt_t pt_src)
++{
++    sc_err_t err = SC_ERR_NONE;
++    board_print(1, "partition resource assign from %d to %d\n", pt_src, g_pt_m4_1);
++    //rm_dump(pt_src);
++    {
++        /* Mark all resources as not movable */
++        BRD_ERR(rm_set_resource_movable(pt_src, SC_R_ALL, SC_R_ALL,
++                SC_FALSE));
++        BRD_ERR(rm_set_pad_movable(pt_src, SC_P_ALL, SC_P_ALL,
++                SC_FALSE));
++
++        mark_shared_resources(pt_src, SC_TRUE);
++        /* move resources to M41 partition */
++        BRD_ERR(rm_move_all(pt_src, pt_src, g_pt_m4_1, SC_TRUE, SC_TRUE));
++
++        BRD_ERR(rm_set_resource_movable(pt_src, SC_R_ALL, SC_R_ALL,
++                SC_TRUE));
++        BRD_ERR(rm_set_pad_movable(pt_src, SC_P_ALL, SC_P_ALL,
++                SC_TRUE));
++    }
++
 +    return err;
 +}
 +
@@ -1121,6 +1186,7 @@ index 000000000..72298cde5
 +
 +    board_print(3, "board_system_config(%d, %d)\n", early, alt_config);
 +
++    g_pt_boot = pt_boot;
 +#ifndef EMUL
 +    sc_rm_mr_t mr_temp;
 +
@@ -1204,11 +1270,26 @@ index 000000000..72298cde5
 +        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_0, 0x08081000ULL,
 +            0x08180FFFULL));
 +        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_0, mr_m4_0));
++
++        /* Allow M4_0 to use SYSTEM */
++#ifdef ECOCKPIT_M4_USE_SYSTEM
++        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
++            pt_m4_0, SC_RM_PERM_SEC_RW));
 +#endif
++        /* Move partition to be owned by SC */
++        BRD_ERR(rm_set_parent(pt_boot, pt_m4_0, SC_PT));
++        /* Move boot to be owned by M4 0 */
++        if (no_ap != SC_FALSE)
++        {
++            BRD_ERR(rm_set_parent(SC_PT, pt_boot, pt_m4_0));
++        }
++#endif /* ECOCKPIT_M4_0 */
++
 +#ifdef ECOCKPIT_M4_1
 +        /* Allocate M4_1 partition */
 +        BRD_ERR(rm_partition_alloc(pt_boot, &pt_m4_1, SC_FALSE, SC_TRUE,
 +            SC_FALSE, SC_TRUE, SC_FALSE));
++        g_pt_m4_1 = pt_m4_1;
 +
 +        /* Mark all M4_1 subsystem resources as movable */
 +        BRD_ERR(rm_set_subsys_rsrc_movable(pt_boot, SC_R_M4_1_PID0,
@@ -1241,9 +1322,25 @@ index 000000000..72298cde5
 +            SC_P_FLEXCAN2_TX, SC_TRUE));
 +        BRD_ERR(rm_set_pad_movable(pt_boot, SC_P_QSPI0A_DATA0,
 +            SC_P_COMP_CTL_GPIO_1V8_3V3_QSPI0, SC_TRUE));
++#ifdef EVS
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_MU_12B,
++            SC_R_MU_12B, SC_TRUE));
++
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_M4_1_INTMUX,
++            SC_R_M4_1_INTMUX, SC_TRUE));
++
++        mark_shared_resources(pt_boot, SC_TRUE);
++
++        BRD_ERR(rm_set_resource_movable(pt_boot, SC_R_GPIO_1,
++            SC_R_GPIO_1, SC_TRUE));
++#endif
 +
 +        /* Move everything flagged as movable */
 +        BRD_ERR(rm_move_all(pt_boot, pt_boot, pt_m4_1, SC_TRUE, SC_TRUE));
++
++        BRD_ERR(rm_set_peripheral_permissions(pt_m4_1, SC_R_GPIO_1,
++            SC_RM_PT_ALL, SC_RM_PERM_FULL));
++        //(void) pm_force_resource_power_mode(SC_R_GPIO_1, SC_PM_PW_MODE_ON);
 +
 +        /* Allow all to access the SEMA42 */
 +        BRD_ERR(rm_set_peripheral_permissions(pt_m4_1, SC_R_M4_1_SEMA42,
@@ -1256,39 +1353,36 @@ index 000000000..72298cde5
 +
 +        /* Reserve DDR for M4_1 */
 +        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_1, 0x088800000ULL,
-+            0x08FFFFFFFULL));
++            0x08A7FFFFFULL));/* reserve 32MB for M4_1 */
 +        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_1, mr_m4_1));
 +
 +        /* Reserve FlexSPI for M4_1 */
 +        BRD_ERR(rm_memreg_frag(pt_boot, &mr_m4_1, 0x08181000ULL,
 +            0x08280FFFULL));
 +        BRD_ERR(rm_assign_memreg(pt_boot, pt_m4_1, mr_m4_1));
-+#endif
 +
-+        /* Allow AP and M4_1 to use SYSTEM */
++        /* Allow M4_1 to use SYSTEM */
 +#ifdef ECOCKPIT_M4_USE_SYSTEM
-+        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
-+            pt_m4_0, SC_RM_PERM_SEC_RW));
-+        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
-+            a53_sec_part, SC_RM_PERM_SEC_RW));
-+        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
-+            a72_sec_part, SC_RM_PERM_SEC_RW));
 +        BRD_ERR(rm_set_peripheral_permissions(SC_PT, SC_R_SYSTEM,
 +            pt_m4_1, SC_RM_PERM_SEC_RW));
 +#endif
-+
 +        /* Move partition to be owned by SC */
-+#ifdef ECOCKPIT_M4_1
 +        BRD_ERR(rm_set_parent(pt_boot, pt_m4_1, SC_PT));
-+#endif
-+#ifdef ECOCKPIT_M4_0
-+        BRD_ERR(rm_set_parent(pt_boot, pt_m4_0, SC_PT));
-+        /* Move boot to be owned by M4 0 */
++#ifdef EVS
++        (void) rm_assign_resource(pt_boot, SC_PT, SC_R_MU_12A);/* SCFW communicate with M41 with MU_12A */
++        (void) pm_force_resource_power_mode(SC_R_MU_12A, SC_PM_PW_MODE_ON);
++        /* Move A72 part to be owned by M4 1 */
 +        if (no_ap != SC_FALSE)
 +        {
-+            BRD_ERR(rm_set_parent(SC_PT, pt_boot, pt_m4_0));
++            BRD_ERR(rm_set_parent(SC_PT, a72_sec_part, pt_m4_1));
 +        }
-+#endif
++#endif /* EVS */
++#endif /* ECOCKPIT_M4_1 */
++
++        /* TODO DEBUG REMOVE */
++        rm_dump_memregs(pt_m4_1);
++        rm_dump_pads(pt_m4_1);
++        rm_dump_resources(pt_m4_1);
 +
 +        /* Allocate shared partition */
 +        BRD_ERR(rm_partition_alloc(SC_PT, &pt_sh, SC_FALSE, SC_TRUE,
@@ -1296,9 +1390,9 @@ index 000000000..72298cde5
 +
 +        /* Create shared memory space */
 +        BRD_ERR(rm_memreg_frag(pt_boot, &mr_sh,
-+            0x090000000ULL, 0x091FFFFFFULL));
++            0x090000000ULL, 0x090BFFFFFULL));
 +        BRD_ERR(rm_assign_memreg(pt_boot, pt_sh, mr_sh));
-+        BRD_ERR(rm_set_memreg_permissions(pt_sh, mr_sh, pt_boot,
++        BRD_ERR(rm_set_memreg_permissions(pt_sh, mr_sh, a72_sec_part,
 +            SC_RM_PERM_FULL));
 +#ifdef ECOCKPIT_M4_0
 +        BRD_ERR(rm_set_memreg_permissions(pt_sh, mr_sh, pt_m4_0,
@@ -1647,21 +1741,34 @@ index 000000000..72298cde5
 +/* Trap partition reboot continue                                           */
 +/*--------------------------------------------------------------------------*/
 +void board_reboot_part_cont(sc_rm_pt_t pt, sc_rsrc_t *boot_cpu,
-+    sc_rsrc_t *boot_mu, sc_rsrc_t *boot_dev, sc_faddr_t *boot_addr)
++        sc_rsrc_t *boot_mu, sc_rsrc_t *boot_dev, sc_faddr_t *boot_addr)
 +{
-+	board_print(3, "board_reboot_part_cont: boot_cpu = %s, boot_mu = %s, boot_dev = %s, boot_addr = 0x%08x\n",
-+			rnames[*boot_cpu], rnames[*boot_mu], rnames[*boot_dev], (uint32_t) (*boot_addr & 0xFFFFFFFF));
-+	if(*boot_cpu == SC_R_A72_0)
-+	{
-+#ifdef NOSPL
-+		*boot_addr =  (sc_faddr_t) BL31_BASE_A53;
-+#else
-+        *boot_addr =  (sc_faddr_t) SPL_BASE_A72;
-+#endif
-+	}
 +    /* Code can modify boot parameters on a reboot. Called after partition
 +     * is powered off but before it is powered back on and started.
 +     */
++    sc_rm_pt_t p;
++
++    board_print(3, "board_reboot_part_cont: boot_cpu = %s, boot_mu = %s, boot_dev = %s, boot_addr = 0x%08x\n",
++            rnames[*boot_cpu], rnames[*boot_mu], rnames[*boot_dev], (uint32_t) (*boot_addr & 0xFFFFFFFF));
++    if(*boot_cpu == SC_R_A72_0)
++    {
++#ifdef NOSPL
++        *boot_addr =  (sc_faddr_t) BL31_BASE_A53;
++#else
++        *boot_addr =  (sc_faddr_t) SPL_BASE_A72;
++#endif
++
++        /* get the owner partition of SC_R_DC_1, it's shared resource*/
++        rm_get_resource_owner(pt, SC_R_DC_1, &p);
++        if (p != g_pt_m4_1)
++        {
++            /* Reassign some resource to M4 partition */
++            board_assign_resources(p);
++        }
++
++        MU_Type *base = (MU_Type *)LSIO_MU12A_BASE;/* MU_12A */
++        (void) MU_TriggerInterrupts(base, MU_CR_GIRn(SC_RPC_MU_GIR_SVC));
++    }
 +}
 +
 +/*--------------------------------------------------------------------------*/
@@ -4017,10 +4124,10 @@ index 000000000..f8aa55b97
 +
 diff --git a/platform/board/mx8qm_mek_eco/split.h b/platform/board/mx8qm_mek_eco/split.h
 new file mode 100644
-index 000000000..28672f3d2
+index 000000000..c876a3acc
 --- /dev/null
 +++ b/platform/board/mx8qm_mek_eco/split.h
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,284 @@
 +/*
 +** ###################################################################
 +**
@@ -4106,26 +4213,27 @@ index 000000000..28672f3d2
 +
 +sc_rsrc_t a72_ns_rsrcs[] = {
 +    SC_R_MU_2A,
++    SC_R_MU_6A,
 +    SC_R_MU_8B,
 +    /* display & gfx resources */
 +    SC_R_GPU_1_PID0,
 +    SC_R_GPU_1_PID1,
 +    SC_R_GPU_1_PID2,
 +    SC_R_GPU_1_PID3,
-+    SC_R_DC_1,
-+    SC_R_DC_1_BLIT0,
-+    SC_R_DC_1_BLIT1,
-+    SC_R_DC_1_BLIT2,
-+    SC_R_DC_1_BLIT_OUT,
-+    SC_R_DC_1_WARP,
-+    SC_R_DC_1_VIDEO0,
-+    SC_R_DC_1_VIDEO1,
-+    SC_R_DC_1_FRAC0,
-+    SC_R_DC_1_PLL_0,
-+    SC_R_DC_1_PLL_1,
-+    SC_R_LVDS_1,
-+    SC_R_LVDS_1_PWM_0,
-+    SC_R_LVDS_1_I2C_0,
++//    SC_R_DC_1,
++//    SC_R_DC_1_BLIT0,
++//    SC_R_DC_1_BLIT1,
++//    SC_R_DC_1_BLIT2,
++//    SC_R_DC_1_BLIT_OUT,
++//    SC_R_DC_1_WARP,
++//    SC_R_DC_1_VIDEO0,
++//    SC_R_DC_1_VIDEO1,
++//    SC_R_DC_1_FRAC0,
++//    SC_R_DC_1_PLL_0,
++//    SC_R_DC_1_PLL_1,
++//    SC_R_LVDS_1,
++//    SC_R_LVDS_1_PWM_0,
++//    SC_R_LVDS_1_I2C_0,
 +    //	SC_R_LVDS_1_I2C_1, this resource does not exist for QM
 +    SC_R_DMA_0_CH16,
 +    SC_R_DMA_0_CH17,
@@ -4158,7 +4266,7 @@ index 000000000..28672f3d2
 +    SC_R_DMA_3_CH10,
 +    SC_R_I2C_1,
 +    SC_R_SDHC_0,
-+    SC_R_UART_2,
++    SC_R_UART_1,
 +    SC_R_ENET_1,
 +    /* audio resources */
 +    SC_R_ASRC_0,
@@ -4209,7 +4317,7 @@ index 000000000..28672f3d2
 +    SC_R_VPU_MU_3,
 +    SC_R_DSP,
 +    SC_R_DSP_RAM,
-+    SC_R_CSI_0,
++//    SC_R_CSI_0,
 +    SC_R_CSI_1,
 +    SC_R_MIPI_1,
 +    SC_R_MIPI_1_PWM_0,
@@ -4225,7 +4333,7 @@ index 000000000..28672f3d2
 +    SC_R_MJPEG_ENC_S3,
 +    SC_R_MJPEG_DEC_MP,
 +    SC_R_MJPEG_ENC_MP,
-+    SC_R_ISI_CH0,
++//    SC_R_ISI_CH0,
 +    SC_R_ISI_CH1,
 +    SC_R_ISI_CH2,
 +    SC_R_ISI_CH3,
@@ -4241,12 +4349,12 @@ index 000000000..28672f3d2
 +    SC_R_GPIO_3,
 +    SC_R_GPIO_6,
 +    SC_R_GPIO_7,
-+    SC_R_M4_1_INTMUX,
++//    SC_R_M4_1_INTMUX,
 +};
 +
 +sc_pad_t a72_pads[] = {
-+    SC_P_UART0_RTS_B,
-+    SC_P_UART0_CTS_B,
++    SC_P_UART1_RX,
++    SC_P_UART1_TX,
 +    SC_P_EMMC0_CLK,
 +    SC_P_EMMC0_CMD,
 +    SC_P_EMMC0_DATA0,
@@ -4271,10 +4379,10 @@ index 000000000..28672f3d2
 +    SC_P_ENET1_RGMII_RXD1,
 +    SC_P_ENET1_RGMII_RXD2,
 +    SC_P_ENET1_RGMII_RXD3,
-+    SC_P_LVDS1_GPIO00,
-+    SC_P_LVDS1_GPIO01,
-+    SC_P_LVDS1_I2C1_SCL,
-+    SC_P_LVDS1_I2C1_SDA,
++//    SC_P_LVDS1_GPIO00,
++//    SC_P_LVDS1_GPIO01,
++//    SC_P_LVDS1_I2C1_SCL,
++//    SC_P_LVDS1_I2C1_SDA,
 +    SC_P_MIPI_DSI1_I2C0_SCL,
 +    SC_P_MIPI_DSI1_I2C0_SDA,
 +    SC_P_MIPI_DSI1_GPIO0_00,
