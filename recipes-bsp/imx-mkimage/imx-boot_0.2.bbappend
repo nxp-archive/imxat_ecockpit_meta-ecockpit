@@ -2,7 +2,7 @@
 FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"
 SRC_URI_append = " file://m4_image.bin"
 
-IMXBOOT_TARGETS = "flash_ecockpit_b0_m4"
+IMXBOOT_TARGETS = "flash_ecockpit_b0_evs"
 
 do_compile[depends] += "u-boot-imx-a72:do_deploy"
 
