@@ -11,8 +11,8 @@ on Cortex-A72 for the in-Vehicle Infotainment system. If the desired configurati
 for the IVI, the U-boot defconfig for Cortex-A72 must be changed. This can be specified in the local.conf file from the build directory.
 
 UBOOT_CONFIG[a72]= "imx8qm_mek_a72_defconfig"
-SRCBRANCH_pn-u-boot-imx-a72= "ecockpit_4.14.98_2.3.4-dev"
-SRCREV_pn-u-boot-imx-a72 = "ecockpit_06_02
+SRCBRANCH_pn-u-boot-imx-a72= "ecockpit_4.14.98_2.3.4-evs"
+SRCREV_pn-u-boot-imx-a72 = "ecockpit_06_03
 
 Image building The image should be built withQt 5 support:
 ============
